@@ -1,4 +1,4 @@
-name: 麒麟版打包（Debian 10 归档源 + 自编译 Python，GLIBC 2.28 兼容）
+name: 麒麟版打包（Ubuntu 20.04 + 完整 GLIBC 自带，隔离系统库）
 
 on:
   push:
@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04-arm
     container:
-      image: arm64v8/debian:10
+      image: arm64v8/ubuntu:20.04
       options: --user root
 
     env:
@@ -18,87 +18,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 配置 Debian 10 归档源并安装依赖
+      - name: 安装依赖
         run: |
           set -ex
           
-          # Debian 10 已停止维护，使用官方归档源
-          cat > /etc/apt/sources.list << 'SOURCES'
-          deb http://archive.debian.org/debian buster main contrib non-free
-          deb http://archive.debian.org/debian-security buster/updates main contrib non-free
-          deb http://archive.debian.org/debian buster-updates main contrib non-free
-          SOURCES
+          sed -i 's/ports.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+          apt-get update -qq
           
-          apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::AllowInsecureRepositories=true -qq || true
-          apt-get install -y --force-yes --no-install-recommends \
-            apt-transport-https ca-certificates
-          
-          apt-get update -o Acquire::Check-Valid-Until=false -qq
+          apt-get install -y -qq --no-install-recommends \
+            tzdata \
+            python3 python3-pip python3-tk python3-dev \
+            binutils file patchelf \
+            git
 
-      - name: 安装编译工具链和依赖
-        run: |
-          set -ex
-          
-          # Debian 10 包名修正（去掉 Ubuntu 特有的包名）
-          apt-get install -y -qq --no-install-recommends --allow-unauthenticated \
-            build-essential gcc g++ make \
-            libssl-dev zlib1g-dev libbz2-dev \
-            libreadline-dev libsqlite3-dev \
-            libncursesw5-dev libgdbm-dev \
-            liblzma-dev tk-dev libffi-dev \
-            libopenblas-dev libgfortran-8-dev \
-            libx11-dev libxft-dev libxrender-dev \
-            libfontconfig1-dev libfreetype6-dev \
-            libpng-dev libjpeg-dev \
-            git wget ca-certificates \
-            libgomp1 \
-            uuid-dev \
-            libexpat1-dev \
-            libmpdec-dev \
-            libbluetooth-dev \
-            libdb5.3-dev \
-            libncurses5-dev \
-            libpanel-dev \
-            libxml2-dev \
-            libxslt1-dev \
-            libbz2-dev \
-            libgdbm-compat-dev
+          ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+          dpkg-reconfigure -f noninteractive tzdata 2>/dev/null || true
 
-      - name: 从源码编译 Python 3.8.10
-        run: |
-          set -ex
-          
-          cd /tmp
-          wget -q https://www.python.org/ftp/python/3.8.10/Python-3.8.10.tar.xz
-          tar -xf Python-3.8.10.tar.xz
-          cd Python-3.8.10
-          
-          ./configure \
-            --prefix=/opt/python38 \
-            --enable-shared \
-            --with-ensurepip=install \
-            --enable-optimizations \
-            LDFLAGS="-Wl,-rpath,/opt/python38/lib"
-          
-          make -j$(nproc)
-          make install
-          
-          ln -sf /opt/python38/bin/python3 /usr/local/bin/python3
-          ln -sf /opt/python38/bin/pip3 /usr/local/bin/pip3
-          
-          python3 --version
-
-      - name: 安装 Python 依赖
-        run: |
-          set -ex
-          
+          python3 -m pip install --upgrade pip
           pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-          pip3 install --upgrade pip
-          pip3 install \
-            pyinstaller==5.13.2 \
-            pandas==1.5.3 \
-            openpyxl==3.1.2 \
-            numpy==1.24.3
+          pip3 install pyinstaller==5.13.2 pandas==1.5.3 openpyxl==3.1.2 numpy==1.24.3
 
       - name: PyInstaller 打包
         run: |
@@ -107,7 +45,7 @@ jobs:
           PY_FILE=$(ls *.py | head -n 1)
           echo "主文件: $PY_FILE"
           
-          /opt/python38/bin/python3 -m PyInstaller \
+          pyinstaller \
             --onedir \
             --name "轻松评" \
             --hidden-import pandas \
@@ -120,73 +58,43 @@ jobs:
             --hidden-import tkinter.ttk \
             "$PY_FILE"
 
-      - name: 复制所有系统库到 lib/
+      - name: 打包完整 GLIBC 环境
         run: |
           set -ex
           
           mkdir -p "dist/轻松评/lib"
           
-          # 核心 GLIBC 库
+          # 复制 Ubuntu 20.04 的完整 GLIBC 库
+          cp /lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 "dist/轻松评/lib/"
+          cp /lib/aarch64-linux-gnu/libc.so.6 "dist/轻松评/lib/"
+          cp /lib/aarch64-linux-gnu/libm.so.6 "dist/轻松评/lib/"
+          cp /lib/aarch64-linux-gnu/libpthread.so.0 "dist/轻松评/lib/"
+          cp /lib/aarch64-linux-gnu/libdl.so.2 "dist/轻松评/lib/"
+          cp /lib/aarch64-linux-gnu/librt.so.1 "dist/轻松评/lib/"
+          cp /lib/aarch64-linux-gnu/libresolv.so.2 "dist/轻松评/lib/"
+          cp /lib/aarch64-linux-gnu/libnss_files.so.2 "dist/轻松评/lib/"
+          cp /lib/aarch64-linux-gnu/libnss_dns.so.2 "dist/轻松评/lib/"
+          
+          # 复制其他关键库
           for lib in \
-            /lib/aarch64-linux-gnu/libm.so.6 \
-            /lib/aarch64-linux-gnu/libc.so.6 \
-            /lib/ld-linux-aarch64.so.1 \
-            /lib/aarch64-linux-gnu/libpthread.so.0 \
-            /lib/aarch64-linux-gnu/libdl.so.2 \
-            /lib/aarch64-linux-gnu/librt.so.1; do
+            /usr/lib/aarch64-linux-gnu/libstdc++.so.6 \
+            /usr/lib/aarch64-linux-gnu/libgcc_s.so.1; do
             cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
-          # 数学/科学计算库
-          for lib in \
-            /usr/lib/aarch64-linux-gnu/libopenblas.so.0 \
-            /usr/lib/aarch64-linux-gnu/libgomp.so.1 \
-            /usr/lib/aarch64-linux-gnu/libgfortran.so.5; do
-            cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
-          done
+          # 复制 Python 共享库
+          cp /usr/lib/aarch64-linux-gnu/libpython3.8.so.1.0 "dist/轻松评/lib/" 2>/dev/null || true
           
-          # GUI 库
-          for lib in \
-            /usr/lib/aarch64-linux-gnu/libtcl8.6.so \
-            /usr/lib/aarch64-linux-gnu/libtk8.6.so \
-            /usr/lib/aarch64-linux-gnu/libXft.so.2 \
-            /usr/lib/aarch64-linux-gnu/libXrender.so.1 \
-            /usr/lib/aarch64-linux-gnu/libfontconfig.so.1 \
-            /usr/lib/aarch64-linux-gnu/libX11.so.6 \
-            /usr/lib/aarch64-linux-gnu/libXext.so.6 \
-            /usr/lib/aarch64-linux-gnu/libfreetype.so.6 \
-            /usr/lib/aarch64-linux-gnu/libpng16.so.16; do
-            cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
-          done
+          # 用 patchelf 修改可执行文件的 interpreter 和 rpath
+          patchelf --set-interpreter './lib/ld-linux-aarch64.so.1' --set-rpath '$ORIGIN/lib' "dist/轻松评/轻松评"
           
-          # 压缩/数据/加密库
-          for lib in \
-            /lib/aarch64-linux-gnu/liblzma.so.5 \
-            /lib/aarch64-linux-gnu/libbz2.so.1.0 \
-            /usr/lib/aarch64-linux-gnu/libsqlite3.so.0 \
-            /usr/lib/aarch64-linux-gnu/libffi.so.6 \
-            /usr/lib/aarch64-linux-gnu/libssl.so.1.1 \
-            /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1; do
-            cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
-          done
+          # 修改 libpython 的 rpath
+          if [ -f "dist/轻松评/lib/libpython3.8.so.1.0" ]; then
+            patchelf --set-rpath '$ORIGIN' "dist/轻松评/lib/libpython3.8.so.1.0"
+          fi
           
-          # C++ 标准库
-          cp /usr/lib/aarch64-linux-gnu/libstdc++.so.6 "dist/轻松评/lib/" 2>/dev/null || true
-          
-          # 其他常用库
-          for lib in \
-            /lib/aarch64-linux-gnu/libncursesw.so.6 \
-            /lib/aarch64-linux-gnu/libtinfo.so.6 \
-            /lib/aarch64-linux-gnu/libreadline.so.7 \
-            /lib/aarch64-linux-gnu/libuuid.so.1; do
-            cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
-          done
-          
-          # Python 共享库
-          cp /opt/python38/lib/libpython3.8.so.1.0 "dist/轻松评/lib/" 2>/dev/null || true
-          
-          echo "========== 已打包的库 =========="
-          ls -la "dist/轻松评/lib/"
+          # 修改所有 .so 文件的 rpath
+          find "dist/轻松评" -name "*.so*" -exec patchelf --set-rpath '$ORIGIN/lib:$ORIGIN' {} \; 2>/dev/null || true
 
       - name: 生成启动脚本
         run: |
@@ -195,15 +103,9 @@ jobs:
           cat > "dist/轻松评/run.sh" << 'EOF'
           #!/bin/bash
           DIR="$(cd "$(dirname "$0")" && pwd)"
+          # 使用打包的 GLIBC 库，完全隔离系统库
           export LD_LIBRARY_PATH="$DIR/lib:$LD_LIBRARY_PATH"
-          
-          if [ -f "$DIR/lib/ld-linux-aarch64.so.1" ]; then
-            exec "$DIR/lib/ld-linux-aarch64.so.1" \
-              --library-path "$DIR/lib" \
-              "$DIR/轻松评" "$@"
-          else
-            exec "$DIR/轻松评" "$@"
-          fi
+          exec "$DIR/轻松评" "$@"
           EOF
           
           chmod +x "dist/轻松评/run.sh" "dist/轻松评/轻松评"
@@ -242,11 +144,11 @@ jobs:
       - name: 打包产物
         run: |
           cd dist
-          tar -czf ../麒麟版_轻松评_GLIBC228_全库打包.tar.gz 轻松评/
-          ls -lh ../麒麟版_轻松评_GLIBC228_全库打包.tar.gz
+          tar -czf ../麒麟版_轻松评_自带GLIBC.tar.gz 轻松评/
+          ls -lh ../麒麟版_轻松评_自带GLIBC.tar.gz
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: 麒麟版-轻松评-GLIBC228-全库打包
-          path: 麒麟版_轻松评_GLIBC228_全库打包.tar.gz
+          name: 麒麟版-轻松评-自带GLIBC
+          path: 麒麟版_轻松评_自带GLIBC.tar.gz
