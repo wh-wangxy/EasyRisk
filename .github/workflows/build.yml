@@ -1,4 +1,4 @@
-name: 麒麟版打包（Nuitka + Ubuntu 20.04容器，GLIBC兼容）
+name: 麒麟版打包（PyInstaller + Ubuntu 20.04 容器，稳定快速）
 
 on:
   push:
@@ -7,14 +7,12 @@ on:
 
 jobs:
   build:
-    # 使用 GitHub 原生 ARM64 运行器（宿主系统为 Ubuntu 24.04）
     runs-on: ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v4
 
-      # ---------- 在 Ubuntu 20.04 容器内编译（GLIBC 2.31，兼容麒麟V10） ----------
-      - name: 启动容器并打包
+      - name: 在 Ubuntu 20.04 容器内打包（PyInstaller）
         run: |
           docker run --rm \
             -v $PWD:/work \
@@ -23,54 +21,42 @@ jobs:
             /bin/bash -c "
               set -ex
 
-              # 换源（阿里云）
+              # 换源加速
               sed -i 's/ports.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
               apt-get update -qq
 
-              # 安装编译工具（含 UPX）
+              # 安装 Python 和打包工具
               apt-get install -y -qq --no-install-recommends \
-                python3 python3-pip python3-tk python3-dev \
-                gcc patchelf upx
+                python3 python3-pip python3-tk
 
-              # 配置 pip 清华源加速
+              # 配置 pip 清华源
               python3 -m pip install --upgrade pip
               pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 
-              # 安装 Python 依赖（numpy, pandas, openpyxl）
-              pip3 install nuitka pandas openpyxl numpy
+              # 安装依赖
+              pip3 install pyinstaller pandas openpyxl numpy
 
-              # ---------- Nuitka 编译（单文件，防逆向） ----------
-              python3 -m nuitka \
-                --standalone \
-                --onefile \
-                --enable-plugin=tk-inter \
-                --include-package=pandas \
-                --include-package=openpyxl \
-                --include-package=numpy \
-                --jobs=1 \
-                --output-dir=dist \
-                --output-filename=轻松评 \
-                轻松评20260623.py
+              # ========== PyInstaller 打包（文件夹模式） ==========
+              pyinstaller --onedir --name 轻松评 轻松评20260623.py
 
-              # ---------- UPX 压缩（失败不影响） ----------
-              upx --best dist/轻松评 2>/dev/null || true
+              # ========== 复制可能缺失的动态库 ==========
+              mkdir -p dist/轻松评/lib
+              find /usr/lib -name 'libgomp.so.1*' -exec cp {} dist/轻松评/lib/ \; 2>/dev/null || true
+              find /usr/lib -name 'libquadmath.so.0*' -exec cp {} dist/轻松评/lib/ \; 2>/dev/null || true
+              find /usr/lib -name 'libtcl*.so.*' -exec cp {} dist/轻松评/lib/ \; 2>/dev/null || true
+              find /usr/lib -name 'libtk*.so.*' -exec cp {} dist/轻松评/lib/ \; 2>/dev/null || true
 
-              # ---------- 补充可能缺失的动态库（内网备用） ----------
-              mkdir -p dist/lib
-              find /usr/lib -name 'libgomp.so.1*' -exec cp {} dist/lib/ \; 2>/dev/null || true
-              find /usr/lib -name 'libquadmath.so.0*' -exec cp {} dist/lib/ \; 2>/dev/null || true
-
-              # ---------- 生成启动脚本 run.sh ----------
-              cat > dist/run.sh << 'EOF'
+              # ========== 生成启动脚本 ==========
+              cat > dist/轻松评/run.sh << 'EOF'
               #!/bin/bash
               DIR=\"\$(cd \"\$(dirname \"\$0\")\" && pwd)\"
               export LD_LIBRARY_PATH=\"\$DIR/lib:\$LD_LIBRARY_PATH\"
               exec \"\$DIR/轻松评\" \"\$@\"
               EOF
-              chmod +x dist/run.sh dist/轻松评
+              chmod +x dist/轻松评/run.sh dist/轻松评/轻松评
 
-              # ---------- 生成桌面快捷方式安装脚本（支持手动添加 icon.png） ----------
-              cat > dist/安装桌面快捷方式.sh << 'INSTALL_SCRIPT'
+              # ========== 生成快捷方式安装脚本（支持手动添加图标） ==========
+              cat > dist/轻松评/安装桌面快捷方式.sh << 'INSTALL_SCRIPT'
               #!/bin/bash
               SCRIPT_DIR=\"\$(cd \"\$(dirname \"\$0\")\" && pwd)\"
               DESKTOP_DIR=\"\$HOME/桌面\"
@@ -94,21 +80,17 @@ jobs:
               Categories=Office;
               EOF2
               chmod +x \"\$DESKTOP_DIR/轻松评.desktop\"
-              echo \"✅ 桌面快捷方式已创建（若需图标，请放置 icon.png 后重新运行本脚本）\"
+              echo \"✅ 桌面快捷方式已创建（可手动放入 icon.png 后重新运行本脚本以启用图标）\"
               INSTALL_SCRIPT
-              chmod +x dist/安装桌面快捷方式.sh
+              chmod +x dist/轻松评/安装桌面快捷方式.sh
 
-              # ---------- 打包最终产物 ----------
+              # ========== 打包最终产物 ==========
               cd dist
-              tar -czf /work/麒麟版_轻松评_Nuitka_Ubuntu20.tar.gz \
-                轻松评 run.sh 安装桌面快捷方式.sh lib/ 2>/dev/null || \
-              tar -czf /work/麒麟版_轻松评_Nuitka_Ubuntu20.tar.gz \
-                轻松评 run.sh 安装桌面快捷方式.sh
+              tar -czf /work/麒麟版_轻松评_PyInstaller_稳定版.tar.gz 轻松评/
               "
 
-      # ---------- 上传产物 ----------
       - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
-          name: 麒麟版-兼容GLIBC-无图标
-          path: 麒麟版_轻松评_Nuitka_Ubuntu20.tar.gz
+          name: 麒麟版-PyInstaller-稳定版
+          path: 麒麟版_轻松评_PyInstaller_稳定版.tar.gz
