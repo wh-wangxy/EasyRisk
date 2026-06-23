@@ -1,4 +1,4 @@
-name: 麒麟版打包（PyInstaller + Ubuntu 20.04 容器，稳定版）
+name: 麒麟版打包（PyInstaller + Ubuntu 20.04 容器，GLIBC兼容增强版）
 
 on:
   push:
@@ -15,86 +15,110 @@ jobs:
       - name: 在 Ubuntu 20.04 容器内打包（PyInstaller）
         run: |
           docker run --rm \
-            -v $PWD:/work \
+            -v "$PWD:/work" \
             -w /work \
             arm64v8/ubuntu:20.04 \
-            /bin/bash -c "
+            /bin/bash -c '
               set -ex
 
               # 换源加速
-              sed -i 's/ports.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+              sed -i "s/ports.ubuntu.com/mirrors.aliyun.com/g" /etc/apt/sources.list
               apt-get update -qq
 
-              # 安装必需工具（包括 python3-dev 以获取共享库）
+              # 安装完整依赖（增加可能缺失的库）
               apt-get install -y -qq --no-install-recommends \
                 python3 python3-pip python3-tk python3-dev \
-                binutils file
+                binutils file \
+                libopenblas-base liblzma5 libbz2-1.0 libreadline8 \
+                libsqlite3-0 libncursesw6 libtinfo6
 
               # 配置 pip 清华源
               python3 -m pip install --upgrade pip
               pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-
-              # 安装依赖
               pip3 install pyinstaller pandas openpyxl numpy
 
-              # 自动获取第一个 .py 文件
-              PY_FILE=\$(ls *.py | head -n 1)
-              echo \"检测到主文件：\$PY_FILE\"
+              # 自动获取主文件
+              PY_FILE=$(ls *.py | head -n 1)
+              echo "检测到主文件：$PY_FILE"
 
-              # ========== PyInstaller 打包（文件夹模式） ==========
-              pyinstaller --onedir --name \"轻松评\" \"\$PY_FILE\"
+              # ========== PyInstaller 打包（显式指定Python库路径） ==========
+              PYTHON_LIB=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")
+              pyinstaller \
+                --onedir \
+                --name "轻松评" \
+                --paths "$PYTHON_LIB" \
+                --hidden-import pandas \
+                --hidden-import openpyxl \
+                --hidden-import numpy \
+                --hidden-import tkinter \
+                "$PY_FILE"
 
-              # ========== 批量复制可能缺失的动态库 ==========
-              mkdir -p dist/轻松评/lib
-              LIBS=\"libgomp libquadmath libtcl libtk libffi libstdc++ libgfortran\"
-              for lib in \$LIBS; do
-                find /usr/lib -name \"\${lib}.so.*\" -exec cp {} dist/轻松评/lib/ \; 2>/dev/null || true
+              # ========== 复制可能缺失的动态库（更全面的列表） ==========
+              mkdir -p "dist/轻松评/lib"
+              
+              # 核心数学库
+              for lib in libgomp libquadmath libgfortran libopenblas; do
+                find /usr/lib -name "${lib}.so.*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
               done
+              
+              # GUI相关
+              for lib in libtcl libtk libXft libXrender libfontconfig; do
+                find /usr/lib -name "${lib}.so.*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
+              done
+              
+              # 压缩/数据相关
+              for lib in libffi libstdc++ liblzma libbz2 libsqlite3; do
+                find /usr/lib -name "${lib}.so.*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
+              done
+              
+              # Python共享库（关键！）
+              find /usr/lib -name "libpython3*.so*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
 
-              # ========== 生成启动脚本 ==========
-              cat > dist/轻松评/run.sh << 'EOF'
+              # ========== 生成启动脚本 run.sh ==========
+              cat > "dist/轻松评/run.sh" << "RUN_SCRIPT"
               #!/bin/bash
-              DIR=\"\$(cd \"\$(dirname \"\$0\")\" && pwd)\"
-              export LD_LIBRARY_PATH=\"\$DIR/lib:\$LD_LIBRARY_PATH\"
-              exec \"\$DIR/轻松评\" \"\$@\"
-              EOF
-              chmod +x dist/轻松评/run.sh dist/轻松评/轻松评
+              DIR="$(cd "$(dirname "$0")" && pwd)"
+              export LD_LIBRARY_PATH="$DIR/lib:$LD_LIBRARY_PATH"
+              export PYTHONPATH="$DIR:$PYTHONPATH"
+              exec "$DIR/轻松评" "$@"
+              RUN_SCRIPT
+              chmod +x "dist/轻松评/run.sh" "dist/轻松评/轻松评"
 
-              # ========== 生成快捷方式安装脚本（支持手动添加图标） ==========
-              cat > dist/轻松评/安装桌面快捷方式.sh << 'INSTALL_SCRIPT'
+              # ========== 生成快捷方式安装脚本 ==========
+              cat > "dist/轻松评/安装桌面快捷方式.sh" << "INSTALL_SCRIPT"
               #!/bin/bash
-              SCRIPT_DIR=\"\$(cd \"\$(dirname \"\$0\")\" && pwd)\"
-              DESKTOP_DIR=\"\$HOME/桌面\"
-              [ ! -d \"\$DESKTOP_DIR\" ] && DESKTOP_DIR=\"\$HOME/Desktop\"
-              if [ ! -d \"\$DESKTOP_DIR\" ]; then
-                echo \"❌ 找不到桌面目录\"
+              SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+              DESKTOP_DIR="$HOME/桌面"
+              [ ! -d "$DESKTOP_DIR" ] && DESKTOP_DIR="$HOME/Desktop"
+              if [ ! -d "$DESKTOP_DIR" ]; then
+                echo "找不到桌面目录"
                 exit 1
               fi
-              ICON_LINE=\"\"
-              if [ -f \"\$SCRIPT_DIR/icon.png\" ]; then
-                ICON_LINE=\"Icon=\$SCRIPT_DIR/icon.png\"
+              ICON_LINE=""
+              if [ -f "$SCRIPT_DIR/icon.png" ]; then
+                ICON_LINE="Icon=$SCRIPT_DIR/icon.png"
               fi
-              cat > \"\$DESKTOP_DIR/轻松评.desktop\" << EOF2
+              cat > "$DESKTOP_DIR/轻松评.desktop" << DESKTOP_ENTRY
               [Desktop Entry]
               Type=Application
               Name=轻松评
               Comment=税务数据工具
-              Exec=\$SCRIPT_DIR/run.sh
-              \$ICON_LINE
+              Exec=$SCRIPT_DIR/run.sh
+              $ICON_LINE
               Terminal=false
               Categories=Office;
-              EOF2
-              chmod +x \"\$DESKTOP_DIR/轻松评.desktop\"
-              echo \"✅ 桌面快捷方式已创建（可手动放入 icon.png 后重新运行本脚本以启用图标）\"
+              DESKTOP_ENTRY
+              chmod +x "$DESKTOP_DIR/轻松评.desktop"
+              echo "桌面快捷方式已创建（可手动放入 icon.png 后重新运行本脚本以启用图标）"
               INSTALL_SCRIPT
-              chmod +x dist/轻松评/安装桌面快捷方式.sh
+              chmod +x "dist/轻松评/安装桌面快捷方式.sh"
 
               # ========== 打包最终产物 ==========
               cd dist
               tar -czf /work/麒麟版_轻松评_PyInstaller_稳定版.tar.gz 轻松评/
-              "
+            '
 
-      - name: 上传结果
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: 麒麟版-PyInstaller-稳定版
