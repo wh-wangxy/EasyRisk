@@ -29,7 +29,6 @@ jobs:
           deb http://archive.debian.org/debian buster-updates main contrib non-free
           SOURCES
           
-          # 允许从归档源获取
           apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::AllowInsecureRepositories=true -qq || true
           apt-get install -y --force-yes --no-install-recommends \
             apt-transport-https ca-certificates
@@ -40,19 +39,30 @@ jobs:
         run: |
           set -ex
           
+          # Debian 10 包名修正（去掉 Ubuntu 特有的包名）
           apt-get install -y -qq --no-install-recommends --allow-unauthenticated \
             build-essential gcc g++ make \
             libssl-dev zlib1g-dev libbz2-dev \
             libreadline-dev libsqlite3-dev \
             libncursesw5-dev libgdbm-dev \
             liblzma-dev tk-dev libffi-dev \
-            libopenblas-dev libgfortran5 \
+            libopenblas-dev libgfortran-8-dev \
             libx11-dev libxft-dev libxrender-dev \
             libfontconfig1-dev libfreetype6-dev \
             libpng-dev libjpeg-dev \
             git wget ca-certificates \
-            libgomp1 libquadmath0 \
-            uuid-dev
+            libgomp1 \
+            uuid-dev \
+            libexpat1-dev \
+            libmpdec-dev \
+            libbluetooth-dev \
+            libdb5.3-dev \
+            libncurses5-dev \
+            libpanel-dev \
+            libxml2-dev \
+            libxslt1-dev \
+            libbz2-dev \
+            libgdbm-compat-dev
 
       - name: 从源码编译 Python 3.8.10
         run: |
@@ -116,6 +126,7 @@ jobs:
           
           mkdir -p "dist/轻松评/lib"
           
+          # 核心 GLIBC 库
           for lib in \
             /lib/aarch64-linux-gnu/libm.so.6 \
             /lib/aarch64-linux-gnu/libc.so.6 \
@@ -126,14 +137,15 @@ jobs:
             cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
+          # 数学/科学计算库
           for lib in \
             /usr/lib/aarch64-linux-gnu/libopenblas.so.0 \
             /usr/lib/aarch64-linux-gnu/libgomp.so.1 \
-            /usr/lib/aarch64-linux-gnu/libquadmath.so.0 \
             /usr/lib/aarch64-linux-gnu/libgfortran.so.5; do
             cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
+          # GUI 库
           for lib in \
             /usr/lib/aarch64-linux-gnu/libtcl8.6.so \
             /usr/lib/aarch64-linux-gnu/libtk8.6.so \
@@ -147,6 +159,7 @@ jobs:
             cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
+          # 压缩/数据/加密库
           for lib in \
             /lib/aarch64-linux-gnu/liblzma.so.5 \
             /lib/aarch64-linux-gnu/libbz2.so.1.0 \
@@ -157,8 +170,10 @@ jobs:
             cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
+          # C++ 标准库
           cp /usr/lib/aarch64-linux-gnu/libstdc++.so.6 "dist/轻松评/lib/" 2>/dev/null || true
           
+          # 其他常用库
           for lib in \
             /lib/aarch64-linux-gnu/libncursesw.so.6 \
             /lib/aarch64-linux-gnu/libtinfo.so.6 \
@@ -167,6 +182,7 @@ jobs:
             cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
+          # Python 共享库
           cp /opt/python38/lib/libpython3.8.so.1.0 "dist/轻松评/lib/" 2>/dev/null || true
           
           echo "========== 已打包的库 =========="
