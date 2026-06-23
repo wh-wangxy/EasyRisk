@@ -25,9 +25,9 @@ jobs:
               sed -i 's/ports.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
               apt-get update -qq
 
-              # 安装必需工具（binutils 提供 objdump，file 用于检测，patchelf 可选）
+              # 安装必需工具（包括 python3-dev 以获取共享库）
               apt-get install -y -qq --no-install-recommends \
-                python3 python3-pip python3-tk \
+                python3 python3-pip python3-tk python3-dev \
                 binutils file
 
               # 配置 pip 清华源
@@ -37,17 +37,15 @@ jobs:
               # 安装依赖
               pip3 install pyinstaller pandas openpyxl numpy
 
-              # 自动获取第一个 .py 文件（避免硬编码文件名）
+              # 自动获取第一个 .py 文件
               PY_FILE=\$(ls *.py | head -n 1)
               echo \"检测到主文件：\$PY_FILE\"
 
               # ========== PyInstaller 打包（文件夹模式） ==========
-              # 使用双引号包裹中文名，避免转义问题
               pyinstaller --onedir --name \"轻松评\" \"\$PY_FILE\"
 
               # ========== 批量复制可能缺失的动态库 ==========
               mkdir -p dist/轻松评/lib
-              # 常见的缺失库列表
               LIBS=\"libgomp libquadmath libtcl libtk libffi libstdc++ libgfortran\"
               for lib in \$LIBS; do
                 find /usr/lib -name \"\${lib}.so.*\" -exec cp {} dist/轻松评/lib/ \; 2>/dev/null || true
