@@ -24,7 +24,9 @@ jobs:
           sed -i 's/ports.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
           apt-get update -qq
           apt-get install -y -qq --no-install-recommends \
-            debootstrap binutils git wget file ca-certificates
+            debootstrap binutils git wget file ca-certificates \
+            build-essential gcc make libc6-dev \
+            pkg-config libtalloc-dev  # proot 依赖 talloc
 
       - name: 创建迷你根文件系统
         run: |
@@ -76,7 +78,26 @@ jobs:
               libxcb1 \
               libxdmcp6 \
               libxau6 \
-              libbsd0
+              libbsd0 \
+              libexpat1 \
+              libkeyutils1 \
+              libkrb5-3 \
+              libk5crypto3 \
+              libcom-err2 \
+              libkrb5support0 \
+              libgssapi-krb5-2 \
+              libidn2-0 \
+              libunistring2 \
+              libtasn1-6 \
+              libnettle7 \
+              libhogweed5 \
+              libgmp10 \
+              libp11-kit0 \
+              libzstd1 \
+              liblz4-1 \
+              libsystemd0 \
+              libgcrypt20 \
+              libgpg-error0
           '
 
       - name: 安装 pip 和 Python 包
@@ -97,22 +118,48 @@ jobs:
           cp "$PY_FILE" rootfs/tmp/轻松评.py
           echo "主文件: $PY_FILE"
 
-      - name: 下载并编译静态 proot
+      - name: 下载并编译 proot
         run: |
           set -ex
           
-          # 更新 CA 证书
           update-ca-certificates
-          
-          # 或者跳过 SSL 验证（备用）
           git config --global http.sslVerify false
+          
+          # 安装 proot 编译依赖
+          apt-get install -y -qq libtalloc-dev
           
           git clone --depth=1 https://github.com/proot-me/proot.git
           cd proot
+          
+          # 尝试静态编译，如果失败则动态编译
           make STATIC=1 || make
+          
+          # 验证编译结果
           file proot
+          ldd proot 2>/dev/null || true
+          
+          # 如果 proot 是动态链接的，复制依赖库
+          if ldd proot 2>/dev/null | grep -q "not found"; then
+            echo "警告: proot 有未找到的依赖"
+          fi
+          
           cp proot ../proot-static
           cd ..
+
+      - name: 复制 proot 依赖库（如果是动态链接）
+        run: |
+          set -ex
+          
+          # 检查 proot 的依赖
+          ldd proot-static 2>/dev/null || true
+          
+          # 如果是动态链接，复制依赖到 rootfs
+          mkdir -p rootfs/proot-libs
+          for lib in $(ldd proot-static 2>/dev/null | grep "=> /" | awk '{print $3}' | sort -u); do
+            cp "$lib" rootfs/proot-libs/ 2>/dev/null || true
+          done
+          
+          ls -la rootfs/proot-libs/ 2>/dev/null || true
 
       - name: 创建启动脚本和打包
         run: |
@@ -122,6 +169,11 @@ jobs:
           #!/bin/bash
           DIR="$(cd "$(dirname "$0")" && pwd)"
           export PROOT_NO_SECCOMP=1
+          
+          # 如果 proot 是动态链接的，设置库路径
+          if [ -d "$DIR/rootfs/proot-libs" ] && [ "$(ls -A "$DIR/rootfs/proot-libs" 2>/dev/null)" ]; then
+            export LD_LIBRARY_PATH="$DIR/rootfs/proot-libs:$LD_LIBRARY_PATH"
+          fi
           
           "$DIR/proot-static" \
             -r "$DIR/rootfs" \
@@ -143,6 +195,8 @@ jobs:
             -b /usr/share/themes \
             -b /usr/share/icons \
             -b /usr/share/X11 \
+            -b /etc/fonts \
+            -b /etc/X11 \
             /usr/bin/python3 /tmp/轻松评.py "$@"
           EOF
           chmod +x run.sh
@@ -173,9 +227,13 @@ jobs:
           EOF
           chmod +x 安装桌面快捷方式.sh
 
+          # 验证
+          echo "========== 产物信息 =========="
           ls -la proot-static
+          file proot-static
           ls -la rootfs/usr/bin/python3
           du -sh rootfs/
+          echo "=============================="
 
           tar -czf 麒麟版_轻松评_proot完整环境.tar.gz \
             proot-static \
