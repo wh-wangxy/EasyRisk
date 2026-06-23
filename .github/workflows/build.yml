@@ -26,7 +26,8 @@ jobs:
           apt-get install -y -qq --no-install-recommends \
             debootstrap binutils git wget file ca-certificates \
             build-essential gcc make libc6-dev \
-            pkg-config libtalloc-dev  # proot 依赖 talloc
+            pkg-config libtalloc-dev \
+            autotools-dev autoconf automake libtool  # 添加 autotools
 
       - name: 创建迷你根文件系统
         run: |
@@ -125,35 +126,53 @@ jobs:
           update-ca-certificates
           git config --global http.sslVerify false
           
-          # 安装 proot 编译依赖
           apt-get install -y -qq libtalloc-dev
           
           git clone --depth=1 https://github.com/proot-me/proot.git
           cd proot
           
-          # 尝试静态编译，如果失败则动态编译
-          make STATIC=1 || make
+          # 查看目录结构
+          ls -la
+          find . -name "Makefile" -o -name "CMakeLists.txt" -o -name "configure" -o -name "build.sh"
           
-          # 验证编译结果
-          file proot
-          ldd proot 2>/dev/null || true
-          
-          # 如果 proot 是动态链接的，复制依赖库
-          if ldd proot 2>/dev/null | grep -q "not found"; then
-            echo "警告: proot 有未找到的依赖"
+          # 尝试多种编译方式
+          if [ -f build.sh ]; then
+            ./build.sh
+          elif [ -f configure ]; then
+            ./configure && make
+          elif [ -f src/Makefile ]; then
+            make -C src
+          elif [ -f Makefile ]; then
+            make
+          else
+            # 手动编译
+            cd src
+            gcc -static -o proot \
+              proot.c \
+              -I. \
+              -ltalloc \
+              -lpthread \
+              -DHAVE_CONFIG_H
+            cd ..
           fi
           
-          cp proot ../proot-static
+          # 查找编译产物
+          find . -name "proot" -type f -executable
+          
+          # 复制到上级目录
+          cp $(find . -name "proot" -type f -executable | head -1) ../proot-static || \
+          cp src/proot ../proot-static
+          
           cd ..
+          file proot-static
+          ldd proot-static 2>/dev/null || true
 
       - name: 复制 proot 依赖库（如果是动态链接）
         run: |
           set -ex
           
-          # 检查 proot 的依赖
           ldd proot-static 2>/dev/null || true
           
-          # 如果是动态链接，复制依赖到 rootfs
           mkdir -p rootfs/proot-libs
           for lib in $(ldd proot-static 2>/dev/null | grep "=> /" | awk '{print $3}' | sort -u); do
             cp "$lib" rootfs/proot-libs/ 2>/dev/null || true
@@ -170,7 +189,6 @@ jobs:
           DIR="$(cd "$(dirname "$0")" && pwd)"
           export PROOT_NO_SECCOMP=1
           
-          # 如果 proot 是动态链接的，设置库路径
           if [ -d "$DIR/rootfs/proot-libs" ] && [ "$(ls -A "$DIR/rootfs/proot-libs" 2>/dev/null)" ]; then
             export LD_LIBRARY_PATH="$DIR/rootfs/proot-libs:$LD_LIBRARY_PATH"
           fi
@@ -227,7 +245,6 @@ jobs:
           EOF
           chmod +x 安装桌面快捷方式.sh
 
-          # 验证
           echo "========== 产物信息 =========="
           ls -la proot-static
           file proot-static
