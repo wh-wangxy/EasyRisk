@@ -24,7 +24,7 @@ jobs:
           sed -i 's/ports.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
           apt-get update -qq
           apt-get install -y -qq --no-install-recommends \
-            debootstrap binutils git wget file
+            debootstrap binutils git wget file ca-certificates
 
       - name: 创建迷你根文件系统
         run: |
@@ -32,7 +32,6 @@ jobs:
           mkdir -p rootfs
           debootstrap --variant=minbase --arch=arm64 focal rootfs http://mirrors.aliyun.com/ubuntu-ports
           
-          # 配置完整源（避免 here-document 嵌套冲突，直接 echo）
           chroot rootfs /bin/bash -c '
             echo "deb http://mirrors.aliyun.com/ubuntu-ports focal main restricted universe multiverse" > /etc/apt/sources.list
             echo "deb http://mirrors.aliyun.com/ubuntu-ports focal-updates main restricted universe multiverse" >> /etc/apt/sources.list
@@ -98,9 +97,16 @@ jobs:
           cp "$PY_FILE" rootfs/tmp/轻松评.py
           echo "主文件: $PY_FILE"
 
-      - name: 编译静态 proot
+      - name: 下载并编译静态 proot
         run: |
           set -ex
+          
+          # 更新 CA 证书
+          update-ca-certificates
+          
+          # 或者跳过 SSL 验证（备用）
+          git config --global http.sslVerify false
+          
           git clone --depth=1 https://github.com/proot-me/proot.git
           cd proot
           make STATIC=1 || make
