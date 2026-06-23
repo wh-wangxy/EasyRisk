@@ -1,4 +1,4 @@
-name: 麒麟版打包（Debian 10 容器 + 自编译 Python，GLIBC 2.28 兼容）
+name: 麒麟版打包（Debian 10 归档源 + 自编译 Python，GLIBC 2.28 兼容）
 
 on:
   push:
@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04-arm
     container:
-      image: arm64v8/debian:10  # Debian 10 = GLIBC 2.28，直接兼容麒麟 V10
+      image: arm64v8/debian:10
       options: --user root
 
     env:
@@ -18,17 +18,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 配置 Debian 10 归档源并安装依赖
+        run: |
+          set -ex
+          
+          # Debian 10 已停止维护，使用官方归档源
+          cat > /etc/apt/sources.list << 'SOURCES'
+          deb http://archive.debian.org/debian buster main contrib non-free
+          deb http://archive.debian.org/debian-security buster/updates main contrib non-free
+          deb http://archive.debian.org/debian buster-updates main contrib non-free
+          SOURCES
+          
+          # 允许从归档源获取
+          apt-get update -o Acquire::Check-Valid-Until=false -o Acquire::AllowInsecureRepositories=true -qq || true
+          apt-get install -y --force-yes --no-install-recommends \
+            apt-transport-https ca-certificates
+          
+          apt-get update -o Acquire::Check-Valid-Until=false -qq
+
       - name: 安装编译工具链和依赖
         run: |
           set -ex
           
-          # Debian 10 换源
-          sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
-          sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
-          apt-get update -qq
-          
-          # 安装所有编译依赖（Python + 科学计算 + GUI）
-          apt-get install -y -qq --no-install-recommends \
+          apt-get install -y -qq --no-install-recommends --allow-unauthenticated \
             build-essential gcc g++ make \
             libssl-dev zlib1g-dev libbz2-dev \
             libreadline-dev libsqlite3-dev \
@@ -42,7 +54,7 @@ jobs:
             libgomp1 libquadmath0 \
             uuid-dev
 
-      - name: 从源码编译 Python 3.8.10（静态链接核心库）
+      - name: 从源码编译 Python 3.8.10
         run: |
           set -ex
           
@@ -51,7 +63,6 @@ jobs:
           tar -xf Python-3.8.10.tar.xz
           cd Python-3.8.10
           
-          # 配置：静态链接 libpython，优化大小，禁用不需要的模块
           ./configure \
             --prefix=/opt/python38 \
             --enable-shared \
@@ -62,23 +73,17 @@ jobs:
           make -j$(nproc)
           make install
           
-          # 创建软链接
           ln -sf /opt/python38/bin/python3 /usr/local/bin/python3
           ln -sf /opt/python38/bin/pip3 /usr/local/bin/pip3
           
-          # 验证
           python3 --version
-          python3 -c "import sysconfig; print(sysconfig.get_config_vars('LIBDIR'))"
 
       - name: 安装 Python 依赖
         run: |
           set -ex
           
-          # 使用国内镜像
           pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
           pip3 install --upgrade pip
-          
-          # 安装所有依赖（指定版本确保兼容性）
           pip3 install \
             pyinstaller==5.13.2 \
             pandas==1.5.3 \
@@ -92,7 +97,6 @@ jobs:
           PY_FILE=$(ls *.py | head -n 1)
           echo "主文件: $PY_FILE"
           
-          # 使用自编译的 Python 运行 PyInstaller
           /opt/python38/bin/python3 -m PyInstaller \
             --onedir \
             --name "轻松评" \
@@ -112,7 +116,6 @@ jobs:
           
           mkdir -p "dist/轻松评/lib"
           
-          # ========== 核心 GLIBC 库（Debian 10 = GLIBC 2.28）==========
           for lib in \
             /lib/aarch64-linux-gnu/libm.so.6 \
             /lib/aarch64-linux-gnu/libc.so.6 \
@@ -123,7 +126,6 @@ jobs:
             cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
-          # ========== 数学/科学计算库 ==========
           for lib in \
             /usr/lib/aarch64-linux-gnu/libopenblas.so.0 \
             /usr/lib/aarch64-linux-gnu/libgomp.so.1 \
@@ -132,7 +134,6 @@ jobs:
             cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
-          # ========== GUI 库（tkinter）==========
           for lib in \
             /usr/lib/aarch64-linux-gnu/libtcl8.6.so \
             /usr/lib/aarch64-linux-gnu/libtk8.6.so \
@@ -146,7 +147,6 @@ jobs:
             cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
-          # ========== 压缩/数据/加密库 ==========
           for lib in \
             /lib/aarch64-linux-gnu/liblzma.so.5 \
             /lib/aarch64-linux-gnu/libbz2.so.1.0 \
@@ -157,10 +157,8 @@ jobs:
             cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
-          # ========== C++ 标准库 ==========
           cp /usr/lib/aarch64-linux-gnu/libstdc++.so.6 "dist/轻松评/lib/" 2>/dev/null || true
           
-          # ========== 其他常用库 ==========
           for lib in \
             /lib/aarch64-linux-gnu/libncursesw.so.6 \
             /lib/aarch64-linux-gnu/libtinfo.so.6 \
@@ -169,10 +167,8 @@ jobs:
             cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
-          # ========== Python 共享库（自编译的）==========
           cp /opt/python38/lib/libpython3.8.so.1.0 "dist/轻松评/lib/" 2>/dev/null || true
           
-          # 列出打包清单
           echo "========== 已打包的库 =========="
           ls -la "dist/轻松评/lib/"
 
@@ -183,11 +179,8 @@ jobs:
           cat > "dist/轻松评/run.sh" << 'EOF'
           #!/bin/bash
           DIR="$(cd "$(dirname "$0")" && pwd)"
-          
-          # 优先使用打包的库
           export LD_LIBRARY_PATH="$DIR/lib:$LD_LIBRARY_PATH"
           
-          # 使用打包的动态链接器启动（完全隔离系统 GLIBC）
           if [ -f "$DIR/lib/ld-linux-aarch64.so.1" ]; then
             exec "$DIR/lib/ld-linux-aarch64.so.1" \
               --library-path "$DIR/lib" \
