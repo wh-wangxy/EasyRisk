@@ -25,7 +25,7 @@ jobs:
               sed -i "s/ports.ubuntu.com/mirrors.aliyun.com/g" /etc/apt/sources.list
               apt-get update -qq
 
-              # 安装完整依赖（增加可能缺失的库）
+              # 安装完整依赖
               apt-get install -y -qq --no-install-recommends \
                 python3 python3-pip python3-tk python3-dev \
                 binutils file \
@@ -41,19 +41,17 @@ jobs:
               PY_FILE=$(ls *.py | head -n 1)
               echo "检测到主文件：$PY_FILE"
 
-              # ========== PyInstaller 打包（显式指定Python库路径） ==========
-              PYTHON_LIB=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")
+              # ========== PyInstaller 打包 ==========
               pyinstaller \
                 --onedir \
                 --name "轻松评" \
-                --paths "$PYTHON_LIB" \
                 --hidden-import pandas \
                 --hidden-import openpyxl \
                 --hidden-import numpy \
                 --hidden-import tkinter \
                 "$PY_FILE"
 
-              # ========== 复制可能缺失的动态库（更全面的列表） ==========
+              # ========== 复制可能缺失的动态库 ==========
               mkdir -p "dist/轻松评/lib"
               
               # 核心数学库
@@ -71,7 +69,7 @@ jobs:
                 find /usr/lib -name "${lib}.so.*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
               done
               
-              # Python共享库（关键！）
+              # Python共享库
               find /usr/lib -name "libpython3*.so*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
 
               # ========== 生成启动脚本 run.sh ==========
