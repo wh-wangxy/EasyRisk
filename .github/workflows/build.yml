@@ -1,4 +1,4 @@
-name: 麒麟版打包（PyInstaller + Ubuntu 20.04 容器，GLIBC兼容）
+name: 麒麟版打包（Debian 10 容器 + 自编译 Python，GLIBC 2.28 兼容）
 
 on:
   push:
@@ -9,100 +9,211 @@ jobs:
   build:
     runs-on: ubuntu-24.04-arm
     container:
-      image: arm64v8/ubuntu:20.04
+      image: arm64v8/debian:10  # Debian 10 = GLIBC 2.28，直接兼容麒麟 V10
       options: --user root
 
     env:
-      DEBIAN_FRONTEND: noninteractive  # 禁止交互式提示
+      DEBIAN_FRONTEND: noninteractive
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装依赖
+      - name: 安装编译工具链和依赖
         run: |
           set -ex
           
-          # 换源加速
-          sed -i 's/ports.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+          # Debian 10 换源
+          sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
+          sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
           apt-get update -qq
-
-          # 安装完整依赖（非交互模式）
+          
+          # 安装所有编译依赖（Python + 科学计算 + GUI）
           apt-get install -y -qq --no-install-recommends \
-            tzdata \
-            python3 python3-pip python3-tk python3-dev \
-            binutils file \
-            libopenblas-base liblzma5 libbz2-1.0 libreadline8 \
-            libsqlite3-0 libncursesw6 libtinfo6 \
-            git
+            build-essential gcc g++ make \
+            libssl-dev zlib1g-dev libbz2-dev \
+            libreadline-dev libsqlite3-dev \
+            libncursesw5-dev libgdbm-dev \
+            liblzma-dev tk-dev libffi-dev \
+            libopenblas-dev libgfortran5 \
+            libx11-dev libxft-dev libxrender-dev \
+            libfontconfig1-dev libfreetype6-dev \
+            libpng-dev libjpeg-dev \
+            git wget ca-certificates \
+            libgomp1 libquadmath0 \
+            uuid-dev
 
-          # 配置时区（避免后续警告）
-          ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
-          dpkg-reconfigure -f noninteractive tzdata 2>/dev/null || true
+      - name: 从源码编译 Python 3.8.10（静态链接核心库）
+        run: |
+          set -ex
+          
+          cd /tmp
+          wget -q https://www.python.org/ftp/python/3.8.10/Python-3.8.10.tar.xz
+          tar -xf Python-3.8.10.tar.xz
+          cd Python-3.8.10
+          
+          # 配置：静态链接 libpython，优化大小，禁用不需要的模块
+          ./configure \
+            --prefix=/opt/python38 \
+            --enable-shared \
+            --with-ensurepip=install \
+            --enable-optimizations \
+            LDFLAGS="-Wl,-rpath,/opt/python38/lib"
+          
+          make -j$(nproc)
+          make install
+          
+          # 创建软链接
+          ln -sf /opt/python38/bin/python3 /usr/local/bin/python3
+          ln -sf /opt/python38/bin/pip3 /usr/local/bin/pip3
+          
+          # 验证
+          python3 --version
+          python3 -c "import sysconfig; print(sysconfig.get_config_vars('LIBDIR'))"
 
-          # 配置 pip 清华源
-          python3 -m pip install --upgrade pip
+      - name: 安装 Python 依赖
+        run: |
+          set -ex
+          
+          # 使用国内镜像
           pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-          pip3 install pyinstaller pandas openpyxl numpy
+          pip3 install --upgrade pip
+          
+          # 安装所有依赖（指定版本确保兼容性）
+          pip3 install \
+            pyinstaller==5.13.2 \
+            pandas==1.5.3 \
+            openpyxl==3.1.2 \
+            numpy==1.24.3
 
-      - name: 打包
+      - name: PyInstaller 打包
         run: |
           set -ex
           
           PY_FILE=$(ls *.py | head -n 1)
-          echo "检测到主文件：$PY_FILE"
-
-          # ========== PyInstaller 打包 ==========
-          pyinstaller \
+          echo "主文件: $PY_FILE"
+          
+          # 使用自编译的 Python 运行 PyInstaller
+          /opt/python38/bin/python3 -m PyInstaller \
             --onedir \
             --name "轻松评" \
             --hidden-import pandas \
             --hidden-import openpyxl \
             --hidden-import numpy \
             --hidden-import tkinter \
+            --hidden-import tkinter.scrolledtext \
+            --hidden-import tkinter.filedialog \
+            --hidden-import tkinter.messagebox \
+            --hidden-import tkinter.ttk \
             "$PY_FILE"
 
-          # ========== 复制可能缺失的动态库 ==========
+      - name: 复制所有系统库到 lib/
+        run: |
+          set -ex
+          
           mkdir -p "dist/轻松评/lib"
           
-          for lib in libgomp libquadmath libgfortran libopenblas; do
-            find /usr/lib -name "${lib}.so.*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
+          # ========== 核心 GLIBC 库（Debian 10 = GLIBC 2.28）==========
+          for lib in \
+            /lib/aarch64-linux-gnu/libm.so.6 \
+            /lib/aarch64-linux-gnu/libc.so.6 \
+            /lib/ld-linux-aarch64.so.1 \
+            /lib/aarch64-linux-gnu/libpthread.so.0 \
+            /lib/aarch64-linux-gnu/libdl.so.2 \
+            /lib/aarch64-linux-gnu/librt.so.1; do
+            cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
-          for lib in libtcl libtk libXft libXrender libfontconfig; do
-            find /usr/lib -name "${lib}.so.*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
+          # ========== 数学/科学计算库 ==========
+          for lib in \
+            /usr/lib/aarch64-linux-gnu/libopenblas.so.0 \
+            /usr/lib/aarch64-linux-gnu/libgomp.so.1 \
+            /usr/lib/aarch64-linux-gnu/libquadmath.so.0 \
+            /usr/lib/aarch64-linux-gnu/libgfortran.so.5; do
+            cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
-          for lib in libffi libstdc++ liblzma libbz2 libsqlite3; do
-            find /usr/lib -name "${lib}.so.*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
+          # ========== GUI 库（tkinter）==========
+          for lib in \
+            /usr/lib/aarch64-linux-gnu/libtcl8.6.so \
+            /usr/lib/aarch64-linux-gnu/libtk8.6.so \
+            /usr/lib/aarch64-linux-gnu/libXft.so.2 \
+            /usr/lib/aarch64-linux-gnu/libXrender.so.1 \
+            /usr/lib/aarch64-linux-gnu/libfontconfig.so.1 \
+            /usr/lib/aarch64-linux-gnu/libX11.so.6 \
+            /usr/lib/aarch64-linux-gnu/libXext.so.6 \
+            /usr/lib/aarch64-linux-gnu/libfreetype.so.6 \
+            /usr/lib/aarch64-linux-gnu/libpng16.so.16; do
+            cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
           done
           
-          find /usr/lib -name "libpython3*.so*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
+          # ========== 压缩/数据/加密库 ==========
+          for lib in \
+            /lib/aarch64-linux-gnu/liblzma.so.5 \
+            /lib/aarch64-linux-gnu/libbz2.so.1.0 \
+            /usr/lib/aarch64-linux-gnu/libsqlite3.so.0 \
+            /usr/lib/aarch64-linux-gnu/libffi.so.6 \
+            /usr/lib/aarch64-linux-gnu/libssl.so.1.1 \
+            /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1; do
+            cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
+          done
+          
+          # ========== C++ 标准库 ==========
+          cp /usr/lib/aarch64-linux-gnu/libstdc++.so.6 "dist/轻松评/lib/" 2>/dev/null || true
+          
+          # ========== 其他常用库 ==========
+          for lib in \
+            /lib/aarch64-linux-gnu/libncursesw.so.6 \
+            /lib/aarch64-linux-gnu/libtinfo.so.6 \
+            /lib/aarch64-linux-gnu/libreadline.so.7 \
+            /lib/aarch64-linux-gnu/libuuid.so.1; do
+            cp "$lib" "dist/轻松评/lib/" 2>/dev/null || true
+          done
+          
+          # ========== Python 共享库（自编译的）==========
+          cp /opt/python38/lib/libpython3.8.so.1.0 "dist/轻松评/lib/" 2>/dev/null || true
+          
+          # 列出打包清单
+          echo "========== 已打包的库 =========="
+          ls -la "dist/轻松评/lib/"
 
-          # ========== 生成启动脚本 run.sh ==========
-          cat > "dist/轻松评/run.sh" << "RUN_SCRIPT"
+      - name: 生成启动脚本
+        run: |
+          set -ex
+          
+          cat > "dist/轻松评/run.sh" << 'EOF'
           #!/bin/bash
           DIR="$(cd "$(dirname "$0")" && pwd)"
+          
+          # 优先使用打包的库
           export LD_LIBRARY_PATH="$DIR/lib:$LD_LIBRARY_PATH"
-          export PYTHONPATH="$DIR:$PYTHONPATH"
-          exec "$DIR/轻松评" "$@"
-          RUN_SCRIPT
+          
+          # 使用打包的动态链接器启动（完全隔离系统 GLIBC）
+          if [ -f "$DIR/lib/ld-linux-aarch64.so.1" ]; then
+            exec "$DIR/lib/ld-linux-aarch64.so.1" \
+              --library-path "$DIR/lib" \
+              "$DIR/轻松评" "$@"
+          else
+            exec "$DIR/轻松评" "$@"
+          fi
+          EOF
+          
           chmod +x "dist/轻松评/run.sh" "dist/轻松评/轻松评"
 
-          # ========== 生成快捷方式安装脚本 ==========
-          cat > "dist/轻松评/安装桌面快捷方式.sh" << "INSTALL_SCRIPT"
+      - name: 生成快捷方式安装脚本
+        run: |
+          set -ex
+          
+          cat > "dist/轻松评/安装桌面快捷方式.sh" << 'EOF'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
           DESKTOP_DIR="$HOME/桌面"
           [ ! -d "$DESKTOP_DIR" ] && DESKTOP_DIR="$HOME/Desktop"
-          if [ ! -d "$DESKTOP_DIR" ]; then
-            echo "找不到桌面目录"
-            exit 1
-          fi
+          [ ! -d "$DESKTOP_DIR" ] && { echo "找不到桌面目录"; exit 1; }
+          
           ICON_LINE=""
-          if [ -f "$SCRIPT_DIR/icon.png" ]; then
-            ICON_LINE="Icon=$SCRIPT_DIR/icon.png"
-          fi
-          cat > "$DESKTOP_DIR/轻松评.desktop" << DESKTOP_ENTRY
+          [ -f "$SCRIPT_DIR/icon.png" ] && ICON_LINE="Icon=$SCRIPT_DIR/icon.png"
+          
+          cat > "$DESKTOP_DIR/轻松评.desktop" << DESKTOP
           [Desktop Entry]
           Type=Application
           Name=轻松评
@@ -111,20 +222,22 @@ jobs:
           $ICON_LINE
           Terminal=false
           Categories=Office;
-          DESKTOP_ENTRY
+          DESKTOP
+          
           chmod +x "$DESKTOP_DIR/轻松评.desktop"
-          echo "桌面快捷方式已创建（可手动放入 icon.png 后重新运行本脚本以启用图标）"
-          INSTALL_SCRIPT
+          echo "桌面快捷方式已创建"
+          EOF
+          
           chmod +x "dist/轻松评/安装桌面快捷方式.sh"
 
       - name: 打包产物
         run: |
           cd dist
-          tar -czf ../麒麟版_轻松评_PyInstaller_稳定版.tar.gz 轻松评/
-          ls -lh ../麒麟版_轻松评_PyInstaller_稳定版.tar.gz
+          tar -czf ../麒麟版_轻松评_GLIBC228_全库打包.tar.gz 轻松评/
+          ls -lh ../麒麟版_轻松评_GLIBC228_全库打包.tar.gz
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: 麒麟版-PyInstaller-稳定版
-          path: 麒麟版_轻松评_PyInstaller_稳定版.tar.gz
+          name: 麒麟版-轻松评-GLIBC228-全库打包
+          path: 麒麟版_轻松评_GLIBC228_全库打包.tar.gz
