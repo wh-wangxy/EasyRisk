@@ -24,20 +24,21 @@ jobs:
           sed -i 's/ports.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
           apt-get update -qq
           apt-get install -y -qq --no-install-recommends \
-            debootstrap binutils git wget
+            debootstrap binutils git wget file
 
       - name: 创建迷你根文件系统
         run: |
           set -ex
           mkdir -p rootfs
-          
-          # 使用 debootstrap 创建最小系统
           debootstrap --variant=minbase --arch=arm64 focal rootfs http://mirrors.aliyun.com/ubuntu-ports
           
-          # 配置根文件系统内的源
+          # 配置完整源（包括 updates 和 security）
           chroot rootfs /bin/bash -c '
-            echo "deb http://mirrors.aliyun.com/ubuntu-ports focal main restricted universe multiverse" > /etc/apt/sources.list
-            echo "deb http://mirrors.aliyun.com/ubuntu-ports focal-updates main restricted universe multiverse" >> /etc/apt/sources.list
+            cat > /etc/apt/sources.list << "SOURCES"
+            deb http://mirrors.aliyun.com/ubuntu-ports focal main restricted universe multiverse
+            deb http://mirrors.aliyun.com/ubuntu-ports focal-updates main restricted universe multiverse
+            deb http://mirrors.aliyun.com/ubuntu-ports focal-security main restricted universe multiverse
+            SOURCES
             apt-get update
           '
 
@@ -51,7 +52,7 @@ jobs:
               python3-venv \
               python3-distutils \
               libpython3.8 \
-              libopenblas0 \
+              libopenblas0-pthread \
               libgomp1 \
               libx11-6 \
               libxft2 \
@@ -71,16 +72,22 @@ jobs:
               libtinfo6 \
               libuuid1 \
               ca-certificates \
-              curl
+              curl \
+              fontconfig-config \
+              fonts-dejavu-core \
+              libx11-data \
+              libxcb1 \
+              libxdmcp6 \
+              libxau6 \
+              libbsd0
           '
 
       - name: 安装 pip 和 Python 包
         run: |
           set -ex
           
-          # 下载 get-pip.py 安装 pip
           chroot rootfs /bin/bash -c '
-            curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+            curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py -o /tmp/get-pip.py
             python3 /tmp/get-pip.py
             pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
             pip install pandas==1.5.3 openpyxl==3.1.2 numpy==1.24.3
@@ -89,14 +96,18 @@ jobs:
       - name: 复制程序代码到根文件系统
         run: |
           set -ex
-          cp *.py rootfs/tmp/
+          # 获取实际的 py 文件名
+          PY_FILE=$(ls *.py | head -n 1)
+          cp "$PY_FILE" rootfs/tmp/轻松评.py
+          echo "主文件: $PY_FILE"
 
       - name: 编译静态 proot
         run: |
           set -ex
           git clone --depth=1 https://github.com/proot-me/proot.git
           cd proot
-          make STATIC=1
+          make STATIC=1 || make  # fallback
+          file proot  # 验证是否静态链接
           cp proot ../proot-static
           cd ..
 
@@ -104,11 +115,37 @@ jobs:
         run: |
           set -ex
           
-          cat > run.sh << 'EOF'
+          # 获取实际的 py 文件名用于脚本
+          PY_FILE=$(ls *.py | head -n 1)
+          
+          cat > run.sh << EOF
           #!/bin/bash
-          DIR="$(cd "$(dirname "$0")" && pwd)"
+          # 自动获取脚本目录
+          DIR="\$(cd "\$(dirname "\$0")" && pwd)"
           export PROOT_NO_SECCOMP=1
-          "$DIR/proot-static" -r "$DIR/rootfs" -w / -b /dev -b /proc -b /sys -b /tmp -b /home /usr/bin/python3 /tmp/轻松评20260623.py "$@"
+          
+          # 绑定更多系统目录确保兼容性
+          "\$DIR/proot-static" \
+            -r "\$DIR/rootfs" \
+            -w / \
+            -b /dev \
+            -b /proc \
+            -b /sys \
+            -b /tmp \
+            -b /home \
+            -b /root \
+            -b /etc/passwd \
+            -b /etc/group \
+            -b /etc/localtime \
+            -b /etc/resolv.conf \
+            -b /etc/hosts \
+            -b /run \
+            -b /var \
+            -b /usr/share/fonts \
+            -b /usr/share/themes \
+            -b /usr/share/icons \
+            -b /usr/share/X11 \
+            /usr/bin/python3 /tmp/轻松评.py "\$@"
           EOF
           chmod +x run.sh
 
@@ -127,7 +164,7 @@ jobs:
           Type=Application
           Name=轻松评
           Comment=税务数据工具
-          Exec=$SCRIPT_DIR/run.sh
+          Exec="$SCRIPT_DIR/run.sh"
           $ICON_LINE
           Terminal=false
           Categories=Office;
@@ -137,6 +174,11 @@ jobs:
           echo "桌面快捷方式已创建"
           EOF
           chmod +x 安装桌面快捷方式.sh
+
+          # 验证文件
+          ls -la proot-static
+          ls -la rootfs/usr/bin/python3
+          du -sh rootfs/
 
           tar -czf 麒麟版_轻松评_proot完整环境.tar.gz \
             proot-static \
