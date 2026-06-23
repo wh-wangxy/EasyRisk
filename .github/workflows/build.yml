@@ -14,8 +14,12 @@ jobs:
 
       - name: 在 Ubuntu 20.04 容器内打包（PyInstaller）
         run: |
+          # 显式设置工作目录变量，确保路径正确
+          WORKSPACE="${{ github.workspace }}"
+          echo "工作目录: $WORKSPACE"
+          
           docker run --rm \
-            -v "$PWD:/work" \
+            -v "$WORKSPACE:/work" \
             -w /work \
             arm64v8/ubuntu:20.04 \
             /bin/bash -c '
@@ -54,22 +58,18 @@ jobs:
               # ========== 复制可能缺失的动态库 ==========
               mkdir -p "dist/轻松评/lib"
               
-              # 核心数学库
               for lib in libgomp libquadmath libgfortran libopenblas; do
                 find /usr/lib -name "${lib}.so.*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
               done
               
-              # GUI相关
               for lib in libtcl libtk libXft libXrender libfontconfig; do
                 find /usr/lib -name "${lib}.so.*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
               done
               
-              # 压缩/数据相关
               for lib in libffi libstdc++ liblzma libbz2 libsqlite3; do
                 find /usr/lib -name "${lib}.so.*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
               done
               
-              # Python共享库
               find /usr/lib -name "libpython3*.so*" -exec cp {} "dist/轻松评/lib/" \; 2>/dev/null || true
 
               # ========== 生成启动脚本 run.sh ==========
@@ -111,13 +111,19 @@ jobs:
               INSTALL_SCRIPT
               chmod +x "dist/轻松评/安装桌面快捷方式.sh"
 
-              # ========== 打包最终产物 ==========
-              cd dist
+              # ========== 打包最终产物（确保在 /work 目录下） ==========
+              cd /work/dist
               tar -czf /work/麒麟版_轻松评_PyInstaller_稳定版.tar.gz 轻松评/
+              echo "产物已生成：/work/麒麟版_轻松评_PyInstaller_稳定版.tar.gz"
+              ls -lh /work/麒麟版_轻松评_PyInstaller_稳定版.tar.gz
             '
+
+      - name: 验证产物存在
+        run: |
+          ls -lh "${{ github.workspace }}/麒麟版_轻松评_PyInstaller_稳定版.tar.gz" || echo "产物未找到"
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: 麒麟版-PyInstaller-稳定版
-          path: 麒麟版_轻松评_PyInstaller_稳定版.tar.gz
+          path: ${{ github.workspace }}/麒麟版_轻松评_PyInstaller_稳定版.tar.gz
