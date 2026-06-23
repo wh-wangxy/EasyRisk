@@ -32,13 +32,11 @@ jobs:
           mkdir -p rootfs
           debootstrap --variant=minbase --arch=arm64 focal rootfs http://mirrors.aliyun.com/ubuntu-ports
           
-          # 配置完整源（包括 updates 和 security）
+          # 配置完整源（避免 here-document 嵌套冲突，直接 echo）
           chroot rootfs /bin/bash -c '
-            cat > /etc/apt/sources.list << "SOURCES"
-            deb http://mirrors.aliyun.com/ubuntu-ports focal main restricted universe multiverse
-            deb http://mirrors.aliyun.com/ubuntu-ports focal-updates main restricted universe multiverse
-            deb http://mirrors.aliyun.com/ubuntu-ports focal-security main restricted universe multiverse
-            SOURCES
+            echo "deb http://mirrors.aliyun.com/ubuntu-ports focal main restricted universe multiverse" > /etc/apt/sources.list
+            echo "deb http://mirrors.aliyun.com/ubuntu-ports focal-updates main restricted universe multiverse" >> /etc/apt/sources.list
+            echo "deb http://mirrors.aliyun.com/ubuntu-ports focal-security main restricted universe multiverse" >> /etc/apt/sources.list
             apt-get update
           '
 
@@ -96,7 +94,6 @@ jobs:
       - name: 复制程序代码到根文件系统
         run: |
           set -ex
-          # 获取实际的 py 文件名
           PY_FILE=$(ls *.py | head -n 1)
           cp "$PY_FILE" rootfs/tmp/轻松评.py
           echo "主文件: $PY_FILE"
@@ -106,8 +103,8 @@ jobs:
           set -ex
           git clone --depth=1 https://github.com/proot-me/proot.git
           cd proot
-          make STATIC=1 || make  # fallback
-          file proot  # 验证是否静态链接
+          make STATIC=1 || make
+          file proot
           cp proot ../proot-static
           cd ..
 
@@ -115,18 +112,13 @@ jobs:
         run: |
           set -ex
           
-          # 获取实际的 py 文件名用于脚本
-          PY_FILE=$(ls *.py | head -n 1)
-          
-          cat > run.sh << EOF
+          cat > run.sh << 'EOF'
           #!/bin/bash
-          # 自动获取脚本目录
-          DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+          DIR="$(cd "$(dirname "$0")" && pwd)"
           export PROOT_NO_SECCOMP=1
           
-          # 绑定更多系统目录确保兼容性
-          "\$DIR/proot-static" \
-            -r "\$DIR/rootfs" \
+          "$DIR/proot-static" \
+            -r "$DIR/rootfs" \
             -w / \
             -b /dev \
             -b /proc \
@@ -145,7 +137,7 @@ jobs:
             -b /usr/share/themes \
             -b /usr/share/icons \
             -b /usr/share/X11 \
-            /usr/bin/python3 /tmp/轻松评.py "\$@"
+            /usr/bin/python3 /tmp/轻松评.py "$@"
           EOF
           chmod +x run.sh
 
@@ -175,7 +167,6 @@ jobs:
           EOF
           chmod +x 安装桌面快捷方式.sh
 
-          # 验证文件
           ls -la proot-static
           ls -la rootfs/usr/bin/python3
           du -sh rootfs/
