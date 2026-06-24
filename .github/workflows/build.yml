@@ -1,4 +1,4 @@
-name: 麒麟版打包（proot + 极致精简根文件系统）
+name: 麒麟版打包（proot 预编译 + 极致精简根文件系统）
 
 on:
   push:
@@ -24,9 +24,7 @@ jobs:
           sed -i 's/ports.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
           apt-get update -qq
           apt-get install -y -qq --no-install-recommends \
-            debootstrap binutils git wget file ca-certificates \
-            build-essential gcc make libc6-dev \
-            pkg-config libtalloc-dev
+            debootstrap binutils wget file ca-certificates
 
       - name: 创建根文件系统
         run: |
@@ -75,43 +73,26 @@ jobs:
           PY_FILE=$(ls *.py | head -n 1)
           cp "$PY_FILE" rootfs/tmp/轻松评.py
 
-      - name: 编译 proot
+      - name: 下载预编译静态 proot
         run: |
           set -ex
           
-          update-ca-certificates
-          git config --global http.sslVerify false
-          apt-get install -y -qq libtalloc-dev
+          # 尝试下载 proot 静态二进制
+          wget -q https://github.com/proot-me/proot/releases/download/v5.3.0/proot-v5.3.0-aarch64-static -O proot-static || \
+          wget -q https://github.com/proot-me/proot/releases/download/v5.3.0/proot-v5.3.0-aarch64 -O proot-static || \
+          wget -q https://github.com/proot-me/proot/releases/download/v5.2.0/proot-v5.2.0-aarch64-static -O proot-static || \
+          wget -q https://github.com/proot-me/proot/releases/download/v5.2.0/proot-v5.2.0-aarch64 -O proot-static || \
+          wget -q https://github.com/proot-me/proot/releases/download/v5.1.0/proot-v5.1.0-aarch64-static -O proot-static || \
+          wget -q https://github.com/proot-me/proot/releases/download/v5.1.0/proot-v5.1.0-aarch64 -O proot-static
           
-          git clone --depth=1 https://github.com/proot-me/proot.git
-          cd proot
-          
-          cd src
-          C_FILES=$(find . -name "*.c")
-          INC_DIRS=$(find . -type d | sed 's/^/-I/')
-          gcc -static -o proot $C_FILES $INC_DIRS -ltalloc -lpthread -DHAVE_CONFIG_H
-          cd ..
-          
-          cp src/proot ../proot-static
-          cd ..
-          
+          chmod +x proot-static
           file proot-static
           ldd proot-static 2>/dev/null || true
-
-      - name: 复制 proot 依赖
-        run: |
-          set -ex
-          
-          mkdir -p rootfs/proot-libs
-          for lib in $(ldd proot-static 2>/dev/null | grep "=> /" | awk '{print $3}' | sort -u); do
-            cp "$lib" rootfs/proot-libs/ 2>/dev/null || true
-          done
 
       - name: 极致精简
         run: |
           set -ex
           
-          # 删除所有非必需
           rm -rf rootfs/var/cache/apt/archives/*
           rm -rf rootfs/var/lib/apt/lists/*
           rm -rf rootfs/usr/share/doc
@@ -119,7 +100,7 @@ jobs:
           rm -rf rootfs/usr/share/info
           rm -rf rootfs/usr/share/lintian
           rm -rf rootfs/usr/share/linda
-          rm -rf rootfs/usr/share/zoneinfo  # 时区数据很大，可选删除
+          rm -rf rootfs/usr/share/zoneinfo
           rm -rf rootfs/usr/share/i18n
           rm -rf rootfs/usr/share/common-licenses
           rm -rf rootfs/usr/share/debianutils
@@ -128,10 +109,8 @@ jobs:
           rm -rf rootfs/usr/share/glib-2.0
           rm -rf rootfs/usr/share/GConf
           
-          # 只保留 C 和中文 locale
           find rootfs/usr/share/locale -mindepth 1 -maxdepth 1 ! -name "C" ! -name "C.UTF-8" ! -name "zh*" -exec rm -rf {} + 2>/dev/null || true
           
-          # 删除 Python 所有非运行必需
           find rootfs/usr/lib/python3.8 -type d \( \
             -name "__pycache__" -o \
             -name "test" -o \
@@ -144,12 +123,10 @@ jobs:
             -name "idlelib" \
           \) -exec rm -rf {} + 2>/dev/null || true
           
-          # 删除 pip 自身（安装完后不需要）
           rm -rf rootfs/usr/local/lib/python3.8/dist-packages/pip 2>/dev/null || true
           rm -rf rootfs/usr/local/lib/python3.8/dist-packages/setuptools 2>/dev/null || true
           rm -rf rootfs/usr/local/lib/python3.8/dist-packages/wheel 2>/dev/null || true
           
-          # 删除 numpy/pandas 的测试和文档
           find rootfs/usr/local/lib/python3.8/dist-packages/numpy -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           find rootfs/usr/local/lib/python3.8/dist-packages/numpy -type d -name "testing" -exec rm -rf {} + 2>/dev/null || true
           find rootfs/usr/local/lib/python3.8/dist-packages/numpy -type d -name "doc" -exec rm -rf {} + 2>/dev/null || true
@@ -160,42 +137,27 @@ jobs:
           
           find rootfs/usr/local/lib/python3.8/dist-packages/openpyxl -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           
-          # 删除 .pyc .pyo
           find rootfs -name "*.pyc" -delete 2>/dev/null || true
           find rootfs -name "*.pyo" -delete 2>/dev/null || true
           
-          # 删除编译器和开发文件
           rm -rf rootfs/usr/include
           find rootfs/usr/lib -name "*.a" -delete 2>/dev/null || true
           find rootfs/lib -name "*.a" -delete 2>/dev/null || true
           rm -rf rootfs/usr/lib/python3.8/config-3.8-aarch64-linux-gnu 2>/dev/null || true
-          
-          # 删除 pkgconfig
           rm -rf rootfs/usr/lib/pkgconfig 2>/dev/null || true
           rm -rf rootfs/usr/share/pkgconfig 2>/dev/null || true
           
-          # 删除 bin 下非必需
           find rootfs/usr/bin -type f | grep -v python3 | xargs rm -f 2>/dev/null || true
           find rootfs/bin -type f | grep -v -E "bash|sh|cat|cp|mv|rm|ls|mkdir|chmod|ln|echo" | xargs rm -f 2>/dev/null || true
-          
-          # 删除 sbin 下非必需
           find rootfs/sbin -type f | xargs rm -f 2>/dev/null || true
           find rootfs/usr/sbin -type f | xargs rm -f 2>/dev/null || true
           
-          # 删除 lib 下非 .so 文件
           find rootfs/usr/lib -type f ! -name "*.so*" -delete 2>/dev/null || true
           find rootfs/lib -type f ! -name "*.so*" ! -name "ld-linux*" -delete 2>/dev/null || true
           
-          # 删除 X11 locale（很大）
           rm -rf rootfs/usr/share/X11/locale 2>/dev/null || true
-          
-          # 删除字体缓存和多余字体
           rm -rf rootfs/var/cache/fontconfig 2>/dev/null || true
-          
-          # 删除日志
           rm -rf rootfs/var/log/* 2>/dev/null || true
-          
-          # 删除空目录
           find rootfs -type d -empty -delete 2>/dev/null || true
           
           du -sh rootfs/
@@ -208,10 +170,6 @@ jobs:
           #!/bin/bash
           DIR="$(cd "$(dirname "$0")" && pwd)"
           export PROOT_NO_SECCOMP=1
-          
-          if [ -d "$DIR/rootfs/proot-libs" ] && [ "$(ls -A "$DIR/rootfs/proot-libs" 2>/dev/null)" ]; then
-            export LD_LIBRARY_PATH="$DIR/rootfs/proot-libs:$LD_LIBRARY_PATH"
-          fi
           
           "$DIR/proot-static" \
             -r "$DIR/rootfs" \
