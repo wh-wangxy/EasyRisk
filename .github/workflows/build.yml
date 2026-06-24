@@ -1,4 +1,4 @@
-name: 麒麟版打包（proot + 迷你根文件系统，完全隔离系统库）
+name: 麒麟版打包（proot + 极致精简根文件系统）
 
 on:
   push:
@@ -26,10 +26,9 @@ jobs:
           apt-get install -y -qq --no-install-recommends \
             debootstrap binutils git wget file ca-certificates \
             build-essential gcc make libc6-dev \
-            pkg-config libtalloc-dev \
-            autotools-dev autoconf automake libtool
+            pkg-config libtalloc-dev
 
-      - name: 创建迷你根文件系统
+      - name: 创建根文件系统
         run: |
           set -ex
           mkdir -p rootfs
@@ -42,66 +41,24 @@ jobs:
             apt-get update
           '
 
-      - name: 在根文件系统内安装 Python 和依赖
+      - name: 安装最小 Python 环境
         run: |
           set -ex
           
           chroot rootfs /bin/bash -c '
             apt-get install -y -qq --no-install-recommends \
-              python3 \
-              python3-venv \
-              python3-distutils \
-              libpython3.8 \
-              libopenblas0-pthread \
-              libgomp1 \
-              libx11-6 \
-              libxft2 \
-              libxrender1 \
-              libfontconfig1 \
-              libfreetype6 \
-              libpng16-16 \
-              libtcl8.6 \
-              libtk8.6 \
-              liblzma5 \
-              libbz2-1.0 \
-              libsqlite3-0 \
-              libffi7 \
-              libssl1.1 \
-              libstdc++6 \
-              libncursesw6 \
-              libtinfo6 \
-              libuuid1 \
-              ca-certificates \
-              curl \
-              fontconfig-config \
-              fonts-dejavu-core \
-              libx11-data \
-              libxcb1 \
-              libxdmcp6 \
-              libxau6 \
-              libbsd0 \
-              libexpat1 \
-              libkeyutils1 \
-              libkrb5-3 \
-              libk5crypto3 \
-              libcom-err2 \
-              libkrb5support0 \
-              libgssapi-krb5-2 \
-              libidn2-0 \
-              libunistring2 \
-              libtasn1-6 \
-              libnettle7 \
-              libhogweed5 \
-              libgmp10 \
-              libp11-kit0 \
-              libzstd1 \
-              liblz4-1 \
-              libsystemd0 \
-              libgcrypt20 \
-              libgpg-error0
+              python3 python3-venv python3-distutils libpython3.8 \
+              libopenblas0-pthread libgomp1 \
+              libx11-6 libxft2 libxrender1 libfontconfig1 \
+              libfreetype6 libpng16-16 libtcl8.6 libtk8.6 \
+              liblzma5 libbz2-1.0 libsqlite3-0 libffi7 libssl1.1 \
+              libstdc++6 libncursesw6 libtinfo6 libuuid1 \
+              ca-certificates curl \
+              fontconfig-config fonts-dejavu-core \
+              libx11-data libxcb1 libxdmcp6 libxau6 libbsd0
           '
 
-      - name: 安装 pip 和 Python 包
+      - name: 安装 Python 包
         run: |
           set -ex
           
@@ -109,84 +66,139 @@ jobs:
             curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py -o /tmp/get-pip.py
             python3 /tmp/get-pip.py
             pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-            pip install pandas==1.5.3 openpyxl==3.1.2 numpy==1.24.3
+            pip install --no-cache-dir pandas==1.5.3 openpyxl==3.1.2 numpy==1.24.3
           '
 
-      - name: 复制程序代码到根文件系统
+      - name: 复制程序代码
         run: |
           set -ex
           PY_FILE=$(ls *.py | head -n 1)
           cp "$PY_FILE" rootfs/tmp/轻松评.py
-          echo "主文件: $PY_FILE"
 
-      - name: 下载并编译 proot
+      - name: 编译 proot
         run: |
           set -ex
           
           update-ca-certificates
           git config --global http.sslVerify false
-          
           apt-get install -y -qq libtalloc-dev
           
           git clone --depth=1 https://github.com/proot-me/proot.git
           cd proot
           
-          # 查看 src 目录结构
-          echo "========== src 目录内容 =========="
-          ls -la src/
-          echo "========== src 子目录 =========="
-          find src/ -type d
-          echo "========== src 所有 .c 文件 =========="
-          find src/ -name "*.c" | head -30
-          echo "=================================="
-          
-          # 尝试使用 GNUmakefile
-          if [ -f src/GNUmakefile ]; then
-            echo "使用 src/GNUmakefile"
-            make -C src -f GNUmakefile
-          elif [ -f src/Makefile ]; then
-            echo "使用 src/Makefile"
-            make -C src
-          else
-            echo "手动编译所有 .c 文件"
-            cd src
-            C_FILES=$(find . -name "*.c")
-            echo "找到 .c 文件: $C_FILES"
-            INC_DIRS=$(find . -type d | sed 's/^/-I/')
-            echo "包含目录: $INC_DIRS"
-            gcc -static -o proot \
-              $C_FILES \
-              $INC_DIRS \
-              -ltalloc \
-              -lpthread \
-              -DHAVE_CONFIG_H
-            cd ..
-          fi
-          
-          # 查找并复制编译产物
-          echo "========== 查找 proot 可执行文件 =========="
-          find . -name "proot" -type f
-          find . -name "proot" -type f -executable
-          echo "=========================================="
-          
-          cp $(find . -name "proot" -type f -executable | head -1) ../proot-static
-          
+          cd src
+          C_FILES=$(find . -name "*.c")
+          INC_DIRS=$(find . -type d | sed 's/^/-I/')
+          gcc -static -o proot $C_FILES $INC_DIRS -ltalloc -lpthread -DHAVE_CONFIG_H
           cd ..
+          
+          cp src/proot ../proot-static
+          cd ..
+          
           file proot-static
           ldd proot-static 2>/dev/null || true
 
-      - name: 复制 proot 依赖库（如果是动态链接）
+      - name: 复制 proot 依赖
         run: |
           set -ex
-          
-          ldd proot-static 2>/dev/null || true
           
           mkdir -p rootfs/proot-libs
           for lib in $(ldd proot-static 2>/dev/null | grep "=> /" | awk '{print $3}' | sort -u); do
             cp "$lib" rootfs/proot-libs/ 2>/dev/null || true
           done
+
+      - name: 极致精简
+        run: |
+          set -ex
           
-          ls -la rootfs/proot-libs/ 2>/dev/null || true
+          # 删除所有非必需
+          rm -rf rootfs/var/cache/apt/archives/*
+          rm -rf rootfs/var/lib/apt/lists/*
+          rm -rf rootfs/usr/share/doc
+          rm -rf rootfs/usr/share/man
+          rm -rf rootfs/usr/share/info
+          rm -rf rootfs/usr/share/lintian
+          rm -rf rootfs/usr/share/linda
+          rm -rf rootfs/usr/share/zoneinfo  # 时区数据很大，可选删除
+          rm -rf rootfs/usr/share/i18n
+          rm -rf rootfs/usr/share/common-licenses
+          rm -rf rootfs/usr/share/debianutils
+          rm -rf rootfs/usr/share/dpkg
+          rm -rf rootfs/usr/share/polkit-1
+          rm -rf rootfs/usr/share/glib-2.0
+          rm -rf rootfs/usr/share/GConf
+          
+          # 只保留 C 和中文 locale
+          find rootfs/usr/share/locale -mindepth 1 -maxdepth 1 ! -name "C" ! -name "C.UTF-8" ! -name "zh*" -exec rm -rf {} + 2>/dev/null || true
+          
+          # 删除 Python 所有非运行必需
+          find rootfs/usr/lib/python3.8 -type d \( \
+            -name "__pycache__" -o \
+            -name "test" -o \
+            -name "tests" -o \
+            -name "idle_test" -o \
+            -name "lib2to3" -o \
+            -name "ensurepip" -o \
+            -name "venv" -o \
+            -name "turtledemo" -o \
+            -name "idlelib" \
+          \) -exec rm -rf {} + 2>/dev/null || true
+          
+          # 删除 pip 自身（安装完后不需要）
+          rm -rf rootfs/usr/local/lib/python3.8/dist-packages/pip 2>/dev/null || true
+          rm -rf rootfs/usr/local/lib/python3.8/dist-packages/setuptools 2>/dev/null || true
+          rm -rf rootfs/usr/local/lib/python3.8/dist-packages/wheel 2>/dev/null || true
+          
+          # 删除 numpy/pandas 的测试和文档
+          find rootfs/usr/local/lib/python3.8/dist-packages/numpy -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find rootfs/usr/local/lib/python3.8/dist-packages/numpy -type d -name "testing" -exec rm -rf {} + 2>/dev/null || true
+          find rootfs/usr/local/lib/python3.8/dist-packages/numpy -type d -name "doc" -exec rm -rf {} + 2>/dev/null || true
+          find rootfs/usr/local/lib/python3.8/dist-packages/numpy -name "*.pyi" -delete 2>/dev/null || true
+          
+          find rootfs/usr/local/lib/python3.8/dist-packages/pandas -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find rootfs/usr/local/lib/python3.8/dist-packages/pandas -name "*.pyi" -delete 2>/dev/null || true
+          
+          find rootfs/usr/local/lib/python3.8/dist-packages/openpyxl -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          
+          # 删除 .pyc .pyo
+          find rootfs -name "*.pyc" -delete 2>/dev/null || true
+          find rootfs -name "*.pyo" -delete 2>/dev/null || true
+          
+          # 删除编译器和开发文件
+          rm -rf rootfs/usr/include
+          find rootfs/usr/lib -name "*.a" -delete 2>/dev/null || true
+          find rootfs/lib -name "*.a" -delete 2>/dev/null || true
+          rm -rf rootfs/usr/lib/python3.8/config-3.8-aarch64-linux-gnu 2>/dev/null || true
+          
+          # 删除 pkgconfig
+          rm -rf rootfs/usr/lib/pkgconfig 2>/dev/null || true
+          rm -rf rootfs/usr/share/pkgconfig 2>/dev/null || true
+          
+          # 删除 bin 下非必需
+          find rootfs/usr/bin -type f | grep -v python3 | xargs rm -f 2>/dev/null || true
+          find rootfs/bin -type f | grep -v -E "bash|sh|cat|cp|mv|rm|ls|mkdir|chmod|ln|echo" | xargs rm -f 2>/dev/null || true
+          
+          # 删除 sbin 下非必需
+          find rootfs/sbin -type f | xargs rm -f 2>/dev/null || true
+          find rootfs/usr/sbin -type f | xargs rm -f 2>/dev/null || true
+          
+          # 删除 lib 下非 .so 文件
+          find rootfs/usr/lib -type f ! -name "*.so*" -delete 2>/dev/null || true
+          find rootfs/lib -type f ! -name "*.so*" ! -name "ld-linux*" -delete 2>/dev/null || true
+          
+          # 删除 X11 locale（很大）
+          rm -rf rootfs/usr/share/X11/locale 2>/dev/null || true
+          
+          # 删除字体缓存和多余字体
+          rm -rf rootfs/var/cache/fontconfig 2>/dev/null || true
+          
+          # 删除日志
+          rm -rf rootfs/var/log/* 2>/dev/null || true
+          
+          # 删除空目录
+          find rootfs -type d -empty -delete 2>/dev/null || true
+          
+          du -sh rootfs/
 
       - name: 创建启动脚本和打包
         run: |
@@ -253,21 +265,16 @@ jobs:
           EOF
           chmod +x 安装桌面快捷方式.sh
 
-          echo "========== 产物信息 =========="
-          ls -la proot-static
-          file proot-static
-          ls -la rootfs/usr/bin/python3
-          du -sh rootfs/
-          echo "=============================="
-
-          tar -czf 麒麟版_轻松评_proot完整环境.tar.gz \
+          tar -czf 麒麟版_轻松评.tar.gz \
             proot-static \
             rootfs/ \
             run.sh \
             安装桌面快捷方式.sh
+          
+          ls -lh 麒麟版_轻松评.tar.gz
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: 麒麟版-轻松评-proot完整环境
-          path: 麒麟版_轻松评_proot完整环境.tar.gz
+          name: 麒麟版-轻松评
+          path: 麒麟版_轻松评.tar.gz
