@@ -27,7 +27,7 @@ jobs:
             debootstrap binutils git wget file ca-certificates \
             build-essential gcc make libc6-dev \
             pkg-config libtalloc-dev \
-            autotools-dev autoconf automake libtool  # 添加 autotools
+            autotools-dev autoconf automake libtool
 
       - name: 创建迷你根文件系统
         run: |
@@ -131,37 +131,45 @@ jobs:
           git clone --depth=1 https://github.com/proot-me/proot.git
           cd proot
           
-          # 查看目录结构
-          ls -la
-          find . -name "Makefile" -o -name "CMakeLists.txt" -o -name "configure" -o -name "build.sh"
+          # 查看 src 目录结构
+          echo "========== src 目录内容 =========="
+          ls -la src/
+          echo "========== src 子目录 =========="
+          find src/ -type d
+          echo "========== src 所有 .c 文件 =========="
+          find src/ -name "*.c" | head -30
+          echo "=================================="
           
-          # 尝试多种编译方式
-          if [ -f build.sh ]; then
-            ./build.sh
-          elif [ -f configure ]; then
-            ./configure && make
+          # 尝试使用 GNUmakefile
+          if [ -f src/GNUmakefile ]; then
+            echo "使用 src/GNUmakefile"
+            make -C src -f GNUmakefile
           elif [ -f src/Makefile ]; then
+            echo "使用 src/Makefile"
             make -C src
-          elif [ -f Makefile ]; then
-            make
           else
-            # 手动编译
+            echo "手动编译所有 .c 文件"
             cd src
+            C_FILES=$(find . -name "*.c")
+            echo "找到 .c 文件: $C_FILES"
+            INC_DIRS=$(find . -type d | sed 's/^/-I/')
+            echo "包含目录: $INC_DIRS"
             gcc -static -o proot \
-              proot.c \
-              -I. \
+              $C_FILES \
+              $INC_DIRS \
               -ltalloc \
               -lpthread \
               -DHAVE_CONFIG_H
             cd ..
           fi
           
-          # 查找编译产物
+          # 查找并复制编译产物
+          echo "========== 查找 proot 可执行文件 =========="
+          find . -name "proot" -type f
           find . -name "proot" -type f -executable
+          echo "=========================================="
           
-          # 复制到上级目录
-          cp $(find . -name "proot" -type f -executable | head -1) ../proot-static || \
-          cp src/proot ../proot-static
+          cp $(find . -name "proot" -type f -executable | head -1) ../proot-static
           
           cd ..
           file proot-static
