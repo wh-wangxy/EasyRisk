@@ -5,12 +5,15 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
     container:
       image: arm64v8/ubuntu:20.04
-      options: --user root
+      options: --user root --privileged
 
     env:
       DEBIAN_FRONTEND: noninteractive
@@ -31,7 +34,7 @@ jobs:
           set -ex
           mkdir -p rootfs
           debootstrap --variant=minbase --arch=arm64 focal rootfs http://mirrors.aliyun.com/ubuntu-ports
-          
+
           chroot rootfs /bin/bash -c '
             echo "deb http://mirrors.aliyun.com/ubuntu-ports focal main restricted universe multiverse" > /etc/apt/sources.list
             echo "deb http://mirrors.aliyun.com/ubuntu-ports focal-updates main restricted universe multiverse" >> /etc/apt/sources.list
@@ -42,7 +45,7 @@ jobs:
       - name: 安装最小 Python 环境
         run: |
           set -ex
-          
+
           chroot rootfs /bin/bash -c '
             apt-get install -y -qq --no-install-recommends \
               python3 python3-venv python3-distutils libpython3.8 \
@@ -59,7 +62,7 @@ jobs:
       - name: 安装 Python 包
         run: |
           set -ex
-          
+
           chroot rootfs /bin/bash -c '
             curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py -o /tmp/get-pip.py
             python3 /tmp/get-pip.py
@@ -76,15 +79,13 @@ jobs:
       - name: 下载预编译静态 proot
         run: |
           set -ex
-          
-          # 尝试下载 proot 静态二进制
           wget -q https://github.com/proot-me/proot/releases/download/v5.3.0/proot-v5.3.0-aarch64-static -O proot-static || \
           wget -q https://github.com/proot-me/proot/releases/download/v5.3.0/proot-v5.3.0-aarch64 -O proot-static || \
           wget -q https://github.com/proot-me/proot/releases/download/v5.2.0/proot-v5.2.0-aarch64-static -O proot-static || \
           wget -q https://github.com/proot-me/proot/releases/download/v5.2.0/proot-v5.2.0-aarch64 -O proot-static || \
           wget -q https://github.com/proot-me/proot/releases/download/v5.1.0/proot-v5.1.0-aarch64-static -O proot-static || \
           wget -q https://github.com/proot-me/proot/releases/download/v5.1.0/proot-v5.1.0-aarch64 -O proot-static
-          
+
           chmod +x proot-static
           file proot-static
           ldd proot-static 2>/dev/null || true
@@ -92,7 +93,7 @@ jobs:
       - name: 极致精简
         run: |
           set -ex
-          
+
           rm -rf rootfs/var/cache/apt/archives/*
           rm -rf rootfs/var/lib/apt/lists/*
           rm -rf rootfs/usr/share/doc
@@ -108,9 +109,9 @@ jobs:
           rm -rf rootfs/usr/share/polkit-1
           rm -rf rootfs/usr/share/glib-2.0
           rm -rf rootfs/usr/share/GConf
-          
+
           find rootfs/usr/share/locale -mindepth 1 -maxdepth 1 ! -name "C" ! -name "C.UTF-8" ! -name "zh*" -exec rm -rf {} + 2>/dev/null || true
-          
+
           find rootfs/usr/lib/python3.8 -type d \( \
             -name "__pycache__" -o \
             -name "test" -o \
@@ -122,77 +123,122 @@ jobs:
             -name "turtledemo" -o \
             -name "idlelib" \
           \) -exec rm -rf {} + 2>/dev/null || true
-          
+
           rm -rf rootfs/usr/local/lib/python3.8/dist-packages/pip 2>/dev/null || true
           rm -rf rootfs/usr/local/lib/python3.8/dist-packages/setuptools 2>/dev/null || true
           rm -rf rootfs/usr/local/lib/python3.8/dist-packages/wheel 2>/dev/null || true
-          
+
           find rootfs/usr/local/lib/python3.8/dist-packages/numpy -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           find rootfs/usr/local/lib/python3.8/dist-packages/numpy -type d -name "testing" -exec rm -rf {} + 2>/dev/null || true
           find rootfs/usr/local/lib/python3.8/dist-packages/numpy -type d -name "doc" -exec rm -rf {} + 2>/dev/null || true
           find rootfs/usr/local/lib/python3.8/dist-packages/numpy -name "*.pyi" -delete 2>/dev/null || true
-          
+
           find rootfs/usr/local/lib/python3.8/dist-packages/pandas -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
           find rootfs/usr/local/lib/python3.8/dist-packages/pandas -name "*.pyi" -delete 2>/dev/null || true
-          
+
           find rootfs/usr/local/lib/python3.8/dist-packages/openpyxl -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
-          
+
           find rootfs -name "*.pyc" -delete 2>/dev/null || true
           find rootfs -name "*.pyo" -delete 2>/dev/null || true
-          
+
           rm -rf rootfs/usr/include
           find rootfs/usr/lib -name "*.a" -delete 2>/dev/null || true
           find rootfs/lib -name "*.a" -delete 2>/dev/null || true
           rm -rf rootfs/usr/lib/python3.8/config-3.8-aarch64-linux-gnu 2>/dev/null || true
           rm -rf rootfs/usr/lib/pkgconfig 2>/dev/null || true
           rm -rf rootfs/usr/share/pkgconfig 2>/dev/null || true
-          
+
           find rootfs/usr/bin -type f | grep -v python3 | xargs rm -f 2>/dev/null || true
           find rootfs/bin -type f | grep -v -E "bash|sh|cat|cp|mv|rm|ls|mkdir|chmod|ln|echo" | xargs rm -f 2>/dev/null || true
           find rootfs/sbin -type f | xargs rm -f 2>/dev/null || true
           find rootfs/usr/sbin -type f | xargs rm -f 2>/dev/null || true
-          
+
           find rootfs/usr/lib -type f ! -name "*.so*" -delete 2>/dev/null || true
           find rootfs/lib -type f ! -name "*.so*" ! -name "ld-linux*" -delete 2>/dev/null || true
-          
+
           rm -rf rootfs/usr/share/X11/locale 2>/dev/null || true
           rm -rf rootfs/var/cache/fontconfig 2>/dev/null || true
           rm -rf rootfs/var/log/* 2>/dev/null || true
           find rootfs -type d -empty -delete 2>/dev/null || true
-          
+
           du -sh rootfs/
 
       - name: 创建启动脚本和打包
         run: |
           set -ex
-          
+
           cat > run.sh << 'EOF'
           #!/bin/bash
+          set -e
+
           DIR="$(cd "$(dirname "$0")" && pwd)"
           export PROOT_NO_SECCOMP=1
-          
+
+          # 获取当前宿主用户的 UID/GID，在 proot 内映射为相同身份
+          CURRENT_UID=$(id -u)
+          CURRENT_GID=$(id -g)
+          CURRENT_USER=$(id -un)
+
+          # 在 rootfs 内创建临时 passwd/group 条目，避免 proot 内变成 root
+          mkdir -p "$DIR/rootfs/tmp/proot_fake_etc"
+
+          cat > "$DIR/rootfs/tmp/proot_fake_etc/passwd" << PWF
+          root:x:0:0:root:/root:/bin/bash
+          $CURRENT_USER:x:$CURRENT_UID:$CURRENT_GID:$CURRENT_USER:/home/$CURRENT_USER:/bin/bash
+          PWF
+
+          cat > "$DIR/rootfs/tmp/proot_fake_etc/group" << GRF
+          root:x:0:
+          $CURRENT_USER:x:$CURRENT_GID:
+          GRF
+
+          # 确保输出目录存在且权限正确
+          mkdir -p "$DIR/output"
+          chmod 777 "$DIR/output"
+
+          # 构建绑定挂载列表：只绑定必要的目录，且排除敏感系统路径
+          BIND_OPTS=""
+
+          # 基础伪文件系统
+          BIND_OPTS="$BIND_OPTS -b /dev"
+          BIND_OPTS="$BIND_OPTS -b /proc"
+          BIND_OPTS="$BIND_OPTS -b /sys"
+          BIND_OPTS="$BIND_OPTS -b /tmp"
+
+          # 用户相关（只绑定当前用户的家目录，不绑定 /root）
+          if [ -d "/home/$CURRENT_USER" ]; then
+              BIND_OPTS="$BIND_OPTS -b /home/$CURRENT_USER:/home/$CURRENT_USER"
+          fi
+
+          # 网络配置
+          BIND_OPTS="$BIND_OPTS -b /etc/resolv.conf"
+          BIND_OPTS="$BIND_OPTS -b /etc/hosts"
+
+          # 时区
+          BIND_OPTS="$BIND_OPTS -b /etc/localtime"
+
+          # 字体和图形（可选，如果软件有 GUI）
+          if [ -d "/usr/share/fonts" ]; then
+              BIND_OPTS="$BIND_OPTS -b /usr/share/fonts"
+          fi
+          if [ -d "/etc/fonts" ]; then
+              BIND_OPTS="$BIND_OPTS -b /etc/fonts"
+          fi
+
+          # 绑定软件自己的目录用于输入输出
+          BIND_OPTS="$BIND_OPTS -b $DIR/output:/tmp/output"
+          BIND_OPTS="$BIND_OPTS -b $DIR:/tmp/app"
+
+          # 使用 fake 的 passwd/group 让 proot 内识别当前用户
+          BIND_OPTS="$BIND_OPTS -b $DIR/rootfs/tmp/proot_fake_etc/passwd:/etc/passwd"
+          BIND_OPTS="$BIND_OPTS -b $DIR/rootfs/tmp/proot_fake_etc/group:/etc/group"
+
+          # 启动 proot，指定用户身份运行
           "$DIR/proot-static" \
             -r "$DIR/rootfs" \
-            -w / \
-            -b /dev \
-            -b /proc \
-            -b /sys \
-            -b /tmp \
-            -b /home \
-            -b /root \
-            -b /etc/passwd \
-            -b /etc/group \
-            -b /etc/localtime \
-            -b /etc/resolv.conf \
-            -b /etc/hosts \
-            -b /run \
-            -b /var \
-            -b /usr/share/fonts \
-            -b /usr/share/themes \
-            -b /usr/share/icons \
-            -b /usr/share/X11 \
-            -b /etc/fonts \
-            -b /etc/X11 \
+            -w /tmp \
+            -0 \
+            $BIND_OPTS \
             /usr/bin/python3 /tmp/轻松评.py "$@"
           EOF
           chmod +x run.sh
@@ -203,10 +249,10 @@ jobs:
           DESKTOP_DIR="$HOME/桌面"
           [ ! -d "$DESKTOP_DIR" ] && DESKTOP_DIR="$HOME/Desktop"
           [ ! -d "$DESKTOP_DIR" ] && { echo "找不到桌面目录"; exit 1; }
-          
+
           ICON_LINE=""
           [ -f "$SCRIPT_DIR/icon.png" ] && ICON_LINE="Icon=$SCRIPT_DIR/icon.png"
-          
+
           cat > "$DESKTOP_DIR/轻松评.desktop" << DESKTOP
           [Desktop Entry]
           Type=Application
@@ -217,18 +263,23 @@ jobs:
           Terminal=false
           Categories=Office;
           DESKTOP
-          
+
           chmod +x "$DESKTOP_DIR/轻松评.desktop"
           echo "桌面快捷方式已创建"
           EOF
           chmod +x 安装桌面快捷方式.sh
 
+          # 创建空输出目录
+          mkdir -p output
+          chmod 777 output
+
           tar -czf 麒麟版_轻松评.tar.gz \
             proot-static \
             rootfs/ \
             run.sh \
-            安装桌面快捷方式.sh
-          
+            安装桌面快捷方式.sh \
+            output/
+
           ls -lh 麒麟版_轻松评.tar.gz
 
       - name: 上传产物
